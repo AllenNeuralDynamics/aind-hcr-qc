@@ -17,6 +17,9 @@ readme = "README.md"
 dynamic = ["version"]
 
 dependencies = [
+    'matplotlib',
+    'numpy',
+    'scipy'
 ]
 
 [project.optional-dependencies]
@@ -37,7 +40,7 @@ where = ["src"]
 version = {attr = "hcr_data_qc.__version__"}
 
 [tool.black]
-line-length = 79
+line-length = 120
 target_version = ['py310']
 exclude = '''
 
@@ -71,7 +74,7 @@ exclude_lines = [
 fail_under = 100
 
 [tool.isort]
-line_length = 79
+line_length = 120
 profile = "black"
 
 [tool.interrogate]
