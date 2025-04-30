@@ -1,4 +1,5 @@
 """Functions for visualizing camera alignment QC metrics."""
+
 import json
 import math
 from pathlib import Path
@@ -24,7 +25,9 @@ def load_tile_metrics(json_path: Path) -> Dict[str, Any]:
     return data
 
 
-def _extract_translation_stats(metrics_data: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
+def _extract_translation_stats(
+    metrics_data: Dict[str, Any],
+) -> Tuple[Dict[str, Dict[str, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
     """Extracts translation statistics (dx, dy, d) per pair and combined.
 
     Args:

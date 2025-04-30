@@ -1,18 +1,19 @@
-import numpy as np
-from numpy.testing import assert_allclose
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
+import numpy as np
 from matplotlib.axes import Axes
-
-# Use a non-interactive backend for testing to prevent plots from showing
-matplotlib.use("Agg")
+from matplotlib.figure import Figure
+from numpy.testing import assert_allclose
 
 from hcr_data_qc.camera_alignment import (
     _extract_translation_stats,
     plot_translation_distributions,
     plot_translation_vectors,
 )
+
+# Use a non-interactive backend for testing to prevent plots from showing
+matplotlib.use("Agg")
+
 
 # sample tile_metrics.json
 sample_metrics_data = {
@@ -59,11 +60,13 @@ def test_extract_translation_stats():
 
     expected_dx_all = np.array([1.2, 2.4, 1.5, -2.2, -2.4, -1.9, 0.4, 0.3, 0.6])
     expected_dy_all = np.array([-0.8, -0.6, 0.4, 1.0, 1.3, 0.6, 0.2, 0.1, -0.2])
-    expected_d_all = np.concatenate([
-        expected_stats["488_561"]["d"],
-        expected_stats["561_638"]["d"],
-        expected_stats["638_750"]["d"],
-    ])
+    expected_d_all = np.concatenate(
+        [
+            expected_stats["488_561"]["d"],
+            expected_stats["561_638"]["d"],
+            expected_stats["638_750"]["d"],
+        ]
+    )
 
     # Assertions
     assert stats.keys() == expected_stats.keys()
@@ -81,7 +84,7 @@ def test_extract_translation_stats():
 
 def test_plot_translation_distributions_runs():
     """Check if plot_translation_distributions runs and returns expected types.
-    
+
     Smoke test: check if the function runs and returns expected types. No checking logic here.
     """
     try:
@@ -94,7 +97,7 @@ def test_plot_translation_distributions_runs():
         assert len(fig.axes) > 0
     finally:
         # Close the plot to free memory
-        plt.close(fig if 'fig' in locals() else "all")
+        plt.close(fig if "fig" in locals() else "all")
 
 
 def test_plot_translation_vectors_runs():
@@ -108,4 +111,4 @@ def test_plot_translation_vectors_runs():
         assert fig.axes[0] is ax
     finally:
         # Close the plot to free memory
-        plt.close(fig if 'fig' in locals() else "all") 
+        plt.close(fig if "fig" in locals() else "all")
