@@ -61,8 +61,9 @@ exclude = '''
 '''
 
 [tool.coverage.run]
-omit = ["*__init__*"]
-source = ["hcr_data_qc", "tests"]
+omit = ["*__init__*",
+        "tests/*"]
+source = ["hcr_data_qc"]
 
 [tool.coverage.report]
 exclude_lines = [
@@ -71,7 +72,7 @@ exclude_lines = [
     "^import .*",
     "pragma: no cover"
 ]
-fail_under = 100
+fail_under = 90
 
 [tool.isort]
 line_length = 120

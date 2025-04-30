@@ -1,3 +1,4 @@
+"""Tests for camera_alignment plotting and helper functions."""
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
