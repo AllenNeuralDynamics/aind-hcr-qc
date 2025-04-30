@@ -1,10 +1,13 @@
+"""Functions for visualizing camera alignment QC metrics."""
 import json
-from pathlib import Path
 import math
-from typing import Dict, Any, Tuple
+from pathlib import Path
+
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
 import numpy as np
+from matplotlib.patches import Rectangle
+
+from typing import Any, Dict, Tuple
 
 
 def load_tile_metrics(json_path: Path) -> Dict[str, Any]:
@@ -21,18 +24,19 @@ def load_tile_metrics(json_path: Path) -> Dict[str, Any]:
     return data
 
 
-def plot_translation_distributions(metrics_data: Dict[str, Any]) -> Tuple[plt.Figure, plt.Axes]:
-    """Plot the distribution of translations for each channel pair.
+def _extract_translation_stats(metrics_data: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
+    """Extracts translation statistics (dx, dy, d) per pair and combined.
 
     Args:
-        metrics_data (dict): A dictionary containing the metrics data.
+        metrics_data: The loaded tile metrics data.
 
     Returns:
-        fig: The figure object.
-        axes: The axes object.
-
+        A tuple containing:
+            - stats: Dictionary mapping channel pair to {'dx': array, 'dy': array, 'd': array}.
+            - dx_all: Combined numpy array of all dx values.
+            - dy_all: Combined numpy array of all dy values.
+            - d_all: Combined numpy array of all d (hypotenuse) values.
     """
-    # ---------------------- 1. Extract translations ----------------------
     stats = {}
     dx_all, dy_all, d_all = [], [], []
 
@@ -52,6 +56,22 @@ def plot_translation_distributions(metrics_data: Dict[str, Any]) -> Tuple[plt.Fi
         d_all.extend(d)
 
     dx_all, dy_all, d_all = map(np.asarray, (dx_all, dy_all, d_all))
+    return stats, dx_all, dy_all, d_all
+
+
+def plot_translation_distributions(metrics_data: Dict[str, Any]) -> Tuple[plt.Figure, plt.Axes]:
+    """Plot the distribution of translations for each channel pair.
+
+    Args:
+        metrics_data (dict): A dictionary containing the metrics data.
+
+    Returns:
+        fig: The figure object.
+        axes: The axes object.
+
+    """
+    # ---------------------- 1. Extract translations ----------------------
+    stats, dx_all, dy_all, d_all = _extract_translation_stats(metrics_data)
 
     # ---------------------- 2. Bins  ------------------------
     edges_dx = np.histogram_bin_edges(dx_all, bins="auto")
@@ -125,7 +145,7 @@ def plot_translation_vectors(metrics_data: Dict[str, Any]) -> Tuple[plt.Figure, 
     """
 
     # ---------------------- 1. Settings ----------------------
-    tile_px = 1024  # width / height of a tile in *pixels*
+    tile_px = 145  # width / height of a tile in *pixels*
     pad_frac = 0.10  # extra white-space around worst vector
     shaft_width = 0.03  # linewidth (in tile-units)
     head_width = 0.035  # arrow-head width   (tile-units)
@@ -144,7 +164,7 @@ def plot_translation_vectors(metrics_data: Dict[str, Any]) -> Tuple[plt.Figure, 
             tx_px = info["affine_transform"][0][2]
             ty_px = info["affine_transform"][1][2]
 
-            dx_f, dy_f = tx_px / tile_px, ty_px / tile_px  # +y is “down” in image space
+            dx_f, dy_f = tx_px / tile_px, ty_px / tile_px  # +y is "down" in image space
             records.append((pair, x_idx, y_idx, dx_f, dy_f))
 
             max_shift_f = max(max_shift_f, abs(dx_f), abs(dy_f))
@@ -177,7 +197,7 @@ def plot_translation_vectors(metrics_data: Dict[str, Any]) -> Tuple[plt.Figure, 
     top_xc, top_yc = min_x * tile_step, min_y * tile_step
     ax.add_patch(Rectangle((top_xc - 0.5, top_yc - 0.5), 1, 1, fill=False, ec="black", lw=1.5))
 
-    # 4c. little “axis” inside that tile: 1-pixel right & down
+    # 4c. little "axis" inside that tile: 1-pixel right & down
     one_px_f = 1.0 / tile_px  # one pixel in tile-units
     axis_len = one_px_f * arrow_scale  # converted to plot units
     ax.arrow(
