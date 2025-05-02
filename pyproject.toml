@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "hcr_data_qc"
 description = "Generated from aind-library-template"
 license = {text = "MIT"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "Allen Institute for Neural Dynamics"}
 ]
@@ -41,7 +41,7 @@ version = {attr = "hcr_data_qc.__version__"}
 
 [tool.black]
 line-length = 120
-target_version = ['py39']
+target_version = ['py310']
 exclude = '''
 
 (
