@@ -30,6 +30,7 @@ There are several libraries used to run linters, check documentation, and run te
 ```bash
 coverage run -m unittest discover && coverage report
 ```
+Note: `cd /src/hcr-data-qc && coverage run -m pytest tests/test_camera_alignment.py && coverage report` working better
 
 - Use **interrogate** to check that modules, methods, etc. have been documented thoroughly:
 
