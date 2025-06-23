@@ -121,7 +121,7 @@ class TestCameraAlignment(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
             json.dump(sample_metrics_data, f)
             temp_path = Path(f.name)
-        
+
         try:
             # Test loading
             loaded_data = load_tile_metrics(temp_path)
