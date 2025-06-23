@@ -20,6 +20,8 @@ dependencies = [
     'matplotlib',
     'numpy',
     'scipy'
+    'aind-ng-link',
+    'aind-hcr-data-loader'
 ]
 
 [project.optional-dependencies]

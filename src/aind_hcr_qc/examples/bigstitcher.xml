@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpimData version="0.2">
+  <BasePath type="relative">.</BasePath>
+  <SequenceDescription>
+    <ImageLoader format="bdv.multimg.zarr" version="1.0">
+      <s3bucket>aind-open-data</s3bucket>
+      <zarr type="absolute">HCR_788639-25_2025-06-06_13-00-00_processed_2025-06-17_07-08-14/corrected.ome.zarr</zarr>
+      <zgroups>
+        <zgroup setup="62" timepoint="0">
+          <path>Tile_X_0006_Y_0002_Z_0000_ch_405.zarr</path>
+        </zgroup>
+        <zgroup setup="63" timepoint="0">
+          <path>Tile_X_0006_Y_0003_Z_0000_ch_405.zarr</path>
+        </zgroup>
+        <zgroup setup="64" timepoint="0">
+          <path>Tile_X_0006_Y_0004_Z_0000_ch_405.zarr</path>
+        </zgroup>
+        <zgroup setup="72" timepoint="0">
+          <path>Tile_X_0007_Y_0002_Z_0000_ch_405.zarr</path>
+        </zgroup>
+        <zgroup setup="73" timepoint="0">
+          <path>Tile_X_0007_Y_0003_Z_0000_ch_405.zarr</path>
+        </zgroup>
+        <zgroup setup="74" timepoint="0">
+          <path>Tile_X_0007_Y_0004_Z_0000_ch_405.zarr</path>
+        </zgroup>
+        <zgroup setup="82" timepoint="0">
+          <path>Tile_X_0008_Y_0002_Z_0000_ch_405.zarr</path>
+        </zgroup>
+        <zgroup setup="83" timepoint="0">
+          <path>Tile_X_0008_Y_0003_Z_0000_ch_405.zarr</path>
+        </zgroup>
+        <zgroup setup="84" timepoint="0">
+          <path>Tile_X_0008_Y_0004_Z_0000_ch_405.zarr</path>
+        </zgroup>
+      </zgroups>
+    </ImageLoader>
+    <ViewSetups>
+      <ViewSetup>
+        <id>62</id>
+        <name>Tile_X_0006_Y_0002_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>62</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <ViewSetup>
+        <id>63</id>
+        <name>Tile_X_0006_Y_0003_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>63</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <ViewSetup>
+        <id>64</id>
+        <name>Tile_X_0006_Y_0004_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>64</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <ViewSetup>
+        <id>72</id>
+        <name>Tile_X_0007_Y_0002_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>72</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <ViewSetup>
+        <id>73</id>
+        <name>Tile_X_0007_Y_0003_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>73</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <ViewSetup>
+        <id>74</id>
+        <name>Tile_X_0007_Y_0004_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>74</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <ViewSetup>
+        <id>82</id>
+        <name>Tile_X_0008_Y_0002_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>82</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <ViewSetup>
+        <id>83</id>
+        <name>Tile_X_0008_Y_0003_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>83</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <ViewSetup>
+        <id>84</id>
+        <name>Tile_X_0008_Y_0004_Z_0000_ch_405.zarr</name>
+        <size>1920 1920 1365</size>
+        <voxelSize>
+          <unit>µm</unit>
+          <size>0.2466335423895654 0.2466335423895654 1.0</size>
+        </voxelSize>
+        <attributes>
+          <illumination>0</illumination>
+          <channel>405</channel>
+          <tile>84</tile>
+          <angle>0</angle>
+        </attributes>
+      </ViewSetup>
+      <Attributes name="illumination">
+        <Illumination>
+          <id>0</id>
+          <name>0</name>
+        </Illumination>
+      </Attributes>
+      <Attributes name="channel">
+        <Channel>
+          <id>405</id>
+          <name>405</name>
+        </Channel>
+      </Attributes>
+      <Attributes name="tile">
+        <Tile>
+          <id>62</id>
+          <name>Tile_X_0006_Y_0002_Z_0000</name>
+        </Tile>
+        <Tile>
+          <id>63</id>
+          <name>Tile_X_0006_Y_0003_Z_0000</name>
+        </Tile>
+        <Tile>
+          <id>64</id>
+          <name>Tile_X_0006_Y_0004_Z_0000</name>
+        </Tile>
+        <Tile>
+          <id>72</id>
+          <name>Tile_X_0007_Y_0002_Z_0000</name>
+        </Tile>
+        <Tile>
+          <id>73</id>
+          <name>Tile_X_0007_Y_0003_Z_0000</name>
+        </Tile>
+        <Tile>
+          <id>74</id>
+          <name>Tile_X_0007_Y_0004_Z_0000</name>
+        </Tile>
+        <Tile>
+          <id>82</id>
+          <name>Tile_X_0008_Y_0002_Z_0000</name>
+        </Tile>
+        <Tile>
+          <id>83</id>
+          <name>Tile_X_0008_Y_0003_Z_0000</name>
+        </Tile>
+        <Tile>
+          <id>84</id>
+          <name>Tile_X_0008_Y_0004_Z_0000</name>
+        </Tile>
+      </Attributes>
+      <Attributes name="angle">
+        <Angle>
+          <id>0</id>
+          <name>0</name>
+        </Angle>
+      </Attributes>
+    </ViewSetups>
+    <Timepoints type="pattern">
+      <integerpattern>0</integerpattern>
+    </Timepoints>
+    <MissingViews />
+  </SequenceDescription>
+  <ViewRegistrations>
+    <ViewRegistration timepoint="0" setup="62">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 2736.0 0.0 1.0 0.0 -7296.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+    <ViewRegistration timepoint="0" setup="63">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 2736.0 0.0 1.0 0.0 -5471.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+    <ViewRegistration timepoint="0" setup="64">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 2736.0 0.0 1.0 0.0 -3648.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+    <ViewRegistration timepoint="0" setup="72">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 4560.0 0.0 1.0 0.0 -7296.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+    <ViewRegistration timepoint="0" setup="73">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 4560.0 0.0 1.0 0.0 -5471.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+    <ViewRegistration timepoint="0" setup="74">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 4560.0 0.0 1.0 0.0 -3648.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+    <ViewRegistration timepoint="0" setup="82">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 6383.0 0.0 1.0 0.0 -7296.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+    <ViewRegistration timepoint="0" setup="83">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 6383.0 0.0 1.0 0.0 -5471.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+    <ViewRegistration timepoint="0" setup="84">
+      <ViewTransform type="affine">
+        <Name>Translation to Nominal Grid</Name>
+        <affine>1.0 0.0 0.0 6383.0 0.0 1.0 0.0 -3648.0 0.0 0.0 1.0 0.0</affine>
+      </ViewTransform>
+    </ViewRegistration>
+  </ViewRegistrations>
+  <ViewInterestPoints />
+  <BoundingBoxes />
+  <PointSpreadFunctions />
+  <StitchingResults />
+  <IntensityAdjustments />
+</SpimData>
