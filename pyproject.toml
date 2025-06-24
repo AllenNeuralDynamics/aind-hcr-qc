@@ -21,7 +21,9 @@ dependencies = [
     'numpy',
     'scipy'
     'aind-ng-link',
-    'aind-hcr-data-loader'
+    'aind-hcr-data-loader',
+    'xmltodict'. # needed for parsers temp hack
+    'aind-ng-link'
 ]
 
 [project.optional-dependencies]

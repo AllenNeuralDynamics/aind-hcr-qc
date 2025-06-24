@@ -220,7 +220,7 @@ class XmlParser:
                 "zgroup"
             ]
         ):
-            print(zgroup)
+            #print(zgroup)
             view_paths[int(zgroup["@setup"])] = zgroup["path"]
 
         return view_paths
