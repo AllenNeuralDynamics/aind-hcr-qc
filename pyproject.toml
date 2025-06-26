@@ -22,7 +22,7 @@ dependencies = [
     'scipy'
     'aind-ng-link',
     'aind-hcr-data-loader',
-    'xmltodict'. # needed for parsers temp hack
+    'xmltodict', # needed for parsers temp hack
     'aind-ng-link'
 ]
 

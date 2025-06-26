@@ -1159,49 +1159,65 @@ def create_paired_tiles(data, tile1_name, tile2_name, bucket_name, pyramid_level
     
     return paired
 
-
-
-def figure_tile_overlap_4_slices(tile1_name, 
+def fig_tile_overlap_4_slices(tile1_name, 
                                  tile2_name, 
                                  data,
                                  channel='405', # or "spots"
                                  pyramid_level=1, 
                                  bucket_name='aind-open-data',
                                  save=False,
-                                 output_dir=None):
+                                 output_dir=None,
+                                 verbose=False):
     
     # Create TileData objects
-    if channel == 'spots':
+    if channel == 'spots-avg':
         spots_channels = ["488", "514", "561", "594", "638"]
-        # get tile data for each channel and average them
+        
+        # Pre-create all TileData objects
+        tile_pairs = []
+        
         for ch in spots_channels:
             tile1_name_ch = tile1_name.replace('_ch_405.zarr', f'_ch_{ch}.zarr')
             tile2_name_ch = tile2_name.replace('_ch_405.zarr', f'_ch_{ch}.zarr')
             
             try:
-                if ch == spots_channels[0]:
-                    tile1 = TileData(tile1_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
-                    tile2 = TileData(tile2_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
-                    previous_tile_data = None
-                else:
-                    tile1 = tile1.average(TileData(tile1_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
-                    tile2 = tile2.average(TileData(tile2_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
+                tile1_obj = TileData(tile1_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
+                tile2_obj = TileData(tile2_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
+                tile_pairs.append((tile1_obj, tile2_obj))
+                if verbose:
+                    print(f"Successfully loaded channel {ch}")
             except Exception as e:
                 print(f"Error loading tile {tile1_name_ch} or {tile2_name_ch}: {e}")
                 continue
+        if not tile_pairs:
+            raise ValueError("No valid tile pairs loaded for spots averaging")
+        # Start with first pair
+        tile1, tile2 = tile_pairs[0]
+        
+        # Average remaining pairs
+        for i in range(1, len(tile_pairs)):
+            tile1_next, tile2_next = tile_pairs[i]
+            tile1 = tile1.average(tile1_next)
+            tile2 = tile2.average(tile2_next)
             
-            # check if tile data changed values, max should be diff
-            print(np.max(previous_tile_data), np.max(tile1.data))
-            previous_tile_data = tile1.data.copy()
-            if np.max(previous_tile_data) != np.max(tile1.data):
-                print(f"Tile data changed for {tile1_name_ch} or {tile2_name_ch}, max value: {np.max(tile1.data)}")
-            previous_tile_data = tile1.data.copy()
+            # Explicit cleanup
+            del tile1_next, tile2_next
+            
+            # Force garbage collection every few iterations
+            if i % 2 == 0:
+                import gc
+                gc.collect()
+        
+        # Final cleanup
+        del tile_pairs
+        import gc
+        gc.collect()
 
     elif channel == '405':
         tile1 = TileData(tile1_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
         tile2 = TileData(tile2_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
 
-    padding_dict = {0: 75, 1: 50, 2: 30, 3: 20}
+    padding_dict = {0: 75, 1: 50, 2: 30, 3: 10}
     padding = padding_dict.get(pyramid_level, 50)  # Default to 50 if not found
 
     # look up the values in data["tile_names"] to get the ids (which is the key)
@@ -1213,9 +1229,8 @@ def figure_tile_overlap_4_slices(tile1_name,
     transform2 = data["net_transforms"][tile2_id]
 
     n_cols = 4
-    size = 12
-    figsize = size * n_cols # W
-    fig, axes = plt.subplots(1, n_cols, figsize=(size,size*1.5), sharey=True, constrained_layout=True)
+    size = 6
+    fig, axes = plt.subplots(1, n_cols, figsize=(size,size*1.25), sharey=True, constrained_layout=True)
     axes = axes.flatten()
 
     # Calculate z-slices at 20%, 40%, 60%, and 80% through the z dimension
@@ -1224,7 +1239,7 @@ def figure_tile_overlap_4_slices(tile1_name,
 
     for i, z_slice in enumerate(z_slices):
         result = visualize_tile_overlap(tile1, tile2, transform1, transform2, 
-                                        z_slice=z_slice, padding=padding)
+                                        z_slice=z_slice, padding=padding, verbose=verbose)
         composite = result['composite']
         overlap_shape = composite.shape
         # transpose if a vertically adjacent tile
@@ -1237,19 +1252,109 @@ def figure_tile_overlap_4_slices(tile1_name,
     tile1_name, ch1 = parse_tile_name(tile1.tile_name)
     tile2_name, ch2 = parse_tile_name(tile2.tile_name)
 
-    plt.suptitle(f'Tile Overlap - Red={tile1_name}, Green={tile2_name} Ch={ch1}', fontsize=16)
+    plt.suptitle(f'Tile Overlap - Red={tile1_name}, Green={tile2_name} Ch={channel} Pyr={pyramid_level}', fontsize=16)
     plt.subplots_adjust(top=0.15)
     if save and output_dir:
         from pathlib import Path
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
-        filename = f'tile_overlap_4slices_{tile1_name}_{tile2_name}_ch{ch1}_pyr{pyramid_level}.png'
+        filename = f'tile_overlap_4slices_{tile1_name}_{tile2_name}_{channel}_pyr{pyramid_level}.png'
         filepath = output_path / filename
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
         print(f"Figure saved to: {filepath}")
         plt.close()
     else:
         plt.show()
+
+# def fig_tile_overlap_4_slices(tile1_name, 
+#                                  tile2_name, 
+#                                  data,
+#                                  channel='405', # or "spots"
+#                                  pyramid_level=1, 
+#                                  bucket_name='aind-open-data',
+#                                  save=False,
+#                                  output_dir=None,
+#                                  verbose=False):
+    
+#     # Create TileData objects
+#     if channel == 'spots-avg':
+#         spots_channels = ["488", "514", "561", "594", "638"]
+#         # get tile data for each channel and average them
+#         for ch in spots_channels:
+#             tile1_name_ch = tile1_name.replace('_ch_405.zarr', f'_ch_{ch}.zarr')
+#             tile2_name_ch = tile2_name.replace('_ch_405.zarr', f'_ch_{ch}.zarr')
+            
+#             try:
+#                 if ch == spots_channels[0]:
+#                     tile1 = TileData(tile1_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
+#                     tile2 = TileData(tile2_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
+#                     previous_tile_data = None
+#                 else:
+#                     tile1 = tile1.average(TileData(tile1_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
+#                     tile2 = tile2.average(TileData(tile2_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
+#             except Exception as e:
+#                 print(f"Error loading tile {tile1_name_ch} or {tile2_name_ch}: {e}")
+#                 continue
+            
+#             # check if tile data changed values, max should be diff
+#             print(np.max(previous_tile_data), np.max(tile1.data))
+#             previous_tile_data = tile1.data.copy()
+#             if np.max(previous_tile_data) != np.max(tile1.data):
+#                 print(f"Tile data changed for {tile1_name_ch} or {tile2_name_ch}, max value: {np.max(tile1.data)}")
+#             previous_tile_data = tile1.data.copy()
+
+#     elif channel == '405':
+#         tile1 = TileData(tile1_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
+#         tile2 = TileData(tile2_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
+
+#     padding_dict = {0: 75, 1: 50, 2: 30, 3: 10}
+#     padding = padding_dict.get(pyramid_level, 50)  # Default to 50 if not found
+
+#     # look up the values in data["tile_names"] to get the ids (which is the key)
+#     tile1_id = list(data["tile_names"].keys())[list(data["tile_names"].values()).index(tile1_name)]
+#     tile2_id = list(data["tile_names"].keys())[list(data["tile_names"].values()).index(tile2_name)]
+
+#     # Get transforms for the tiles
+#     transform1 = data["net_transforms"][tile1_id]
+#     transform2 = data["net_transforms"][tile2_id]
+
+#     n_cols = 4
+#     size = 6
+#     fig, axes = plt.subplots(1, n_cols, figsize=(size,size*1.25), sharey=True, constrained_layout=True)
+#     axes = axes.flatten()
+
+#     # Calculate z-slices at 20%, 40%, 60%, and 80% through the z dimension
+#     z_min = max(0, min(tile1.shape[0], tile2.shape[0]))
+#     z_slices = [int(z_min * p) for p in [0.2, 0.4, 0.6, 0.8]]
+
+#     for i, z_slice in enumerate(z_slices):
+#         result = visualize_tile_overlap(tile1, tile2, transform1, transform2, 
+#                                         z_slice=z_slice, padding=padding, verbose=verbose)
+#         composite = result['composite']
+#         overlap_shape = composite.shape
+#         # transpose if a vertically adjacent tile
+#         if overlap_shape[1] > overlap_shape[0]:
+#             composite = composite.transpose(1, 0, 2)
+        
+#         axes[i].imshow(composite, aspect='auto')
+#         axes[i].set_title(f'Z={z_slice}')
+#         axes[i].axis('on')
+#     tile1_name, ch1 = parse_tile_name(tile1.tile_name)
+#     tile2_name, ch2 = parse_tile_name(tile2.tile_name)
+
+#     plt.suptitle(f'Tile Overlap - Red={tile1_name}, Green={tile2_name} Ch={channel} Pyr={pyramid_level}', fontsize=16)
+#     plt.subplots_adjust(top=0.15)
+#     if save and output_dir:
+#         from pathlib import Path
+#         output_path = Path(output_dir)
+#         output_path.mkdir(parents=True, exist_ok=True)
+#         filename = f'tile_overlap_4slices_{tile1_name}_{tile2_name}_{channel}_pyr{pyramid_level}.png'
+#         filepath = output_path / filename
+#         plt.savefig(filepath, dpi=150, bbox_inches='tight')
+#         print(f"Figure saved to: {filepath}")
+#         plt.close()
+#     else:
+#         plt.show()
 
 
 # ------------------------------------------------------------------------------------------------
@@ -3813,7 +3918,8 @@ def analyze_tile_overlap(tile1: TileData, tile2: TileData,
 
 def visualize_tile_overlap(tile1: TileData, tile2: TileData,
                           transform1: np.ndarray, transform2: np.ndarray,
-                          z_slice: int, padding: int = 50):
+                          z_slice: int, padding: int = 50,
+                          verbose: bool = False):
     """
     Create an RGB visualization of overlapping regions between two tiles.
     Creates a composite image of just the overlap region plus padding.
@@ -3854,7 +3960,7 @@ def visualize_tile_overlap(tile1: TileData, tile2: TileData,
     # Calculate composite image dimensions
     height = int(np.ceil(overlap_bbox[1, 1] - overlap_bbox[0, 1]))
     width = int(np.ceil(overlap_bbox[1, 0] - overlap_bbox[0, 0]))
-    print(f"Composite dimensions: {width}x{height}")
+    
     
     # Create empty RGB image
     composite = np.zeros((height, width, 3))
@@ -3870,9 +3976,7 @@ def visualize_tile_overlap(tile1: TileData, tile2: TileData,
     t1_y, t1_x = get_relative_coords(bbox1)
     t2_y, t2_x = get_relative_coords(bbox2)
     
-    print("\nPlacement coordinates:")
-    print(f"Tile 1: y={t1_y}, x={t1_x}, shape={tile1_norm.shape}")
-    print(f"Tile 2: y={t2_y}, x={t2_x}, shape={tile2_norm.shape}")
+    
     
     # Ensure we're not trying to place data outside the composite image
     def safe_place_data(data, y_start, x_start, channel):
@@ -3889,6 +3993,12 @@ def visualize_tile_overlap(tile1: TileData, tile2: TileData,
     # Place the data safely
     safe_place_data(tile1_norm, t1_y, t1_x, 0)
     safe_place_data(tile2_norm, t2_y, t2_x, 1)
+
+    if verbose:
+        print(f"Composite dimensions: {width}x{height}")
+        print("\nPlacement coordinates:")
+        print(f"Tile 1: y={t1_y}, x={t1_x}, shape={tile1_norm.shape}")
+        print(f"Tile 2: y={t2_y}, x={t2_x}, shape={tile2_norm.shape}")
     
     return {
         'composite': composite,
@@ -4066,3 +4176,57 @@ def visualize_orthogonal_views(self, z_slice=None, y_slice=None, x_slice=None, o
     plt.subplots_adjust(top=0.85)
     
     return fig, axes
+
+# ---
+# Tile Alignment QC
+# ---
+def qc_tile_alignment(stitched_xml, pairs, save_dir, bucket_name="aind-open-data", pyramid_level=3):
+    """
+    Generate tile alignment QC plots for all adjacent pairs.
+    
+    Parameters:
+    -----------
+    stitched_xml : dict
+        Parsed BigStitcher XML data
+    pairs : list
+        List of adjacent tile pairs
+    save_dir : Path
+        Directory to save plots
+    bucket_name : str
+        S3 bucket name
+    pyramid_level : int
+        Pyramid level for analysis
+    """
+    from pathlib import Path
+    
+    # Ensure save directory exists
+    save_dir = Path(save_dir/ "tile_alignment_qc")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    channels = ["405", "spots-avg"]
+    
+    print(f"Processing {len(pairs)} tile pairs for channels {channels}")
+    
+    for pair_idx, (tile1_name, tile2_name) in enumerate(pairs):
+        print(f"Processing pair {pair_idx + 1}/{len(pairs)}: {tile1_name} <-> {tile2_name}")
+        
+        for channel in channels:
+            try:
+                print(f"  Channel: {channel}")
+                
+                # Generate plot for this pair and channel
+                fig_tile_overlap_4_slices(
+                    tile1_name, 
+                    tile2_name,
+                    stitched_xml, 
+                    pyramid_level=pyramid_level,
+                    channel=channel,
+                    save=True,
+                    output_dir=save_dir
+                )
+                
+            except Exception as e:
+                print(f"    Error processing pair {pair_idx} channel {channel}: {e}")
+                continue
+    
+    print(f"QC plots saved to {save_dir}")
