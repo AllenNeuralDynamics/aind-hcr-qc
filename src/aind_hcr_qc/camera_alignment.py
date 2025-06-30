@@ -272,3 +272,45 @@ def plot_translation_vectors(metrics_data: Dict[str, Any]) -> Tuple[plt.Figure, 
     plt.show()
 
     return fig, ax
+
+
+def qc_camera_alignment(metrics_file_path, output_dir, verbose=False):
+    """
+    Run camera alignment quality control analysis.
+    
+    Parameters:
+    -----------
+    metrics_file_path : Path or str
+        Path to tile metrics JSON file
+    output_dir : Path or str
+        Directory to save QC outputs
+    verbose : bool
+        Enable verbose output
+    """
+    from pathlib import Path
+    
+    if verbose:
+        print(f"Loading tile metrics from: {metrics_file_path}")
+    
+    # Load metrics data
+    metrics_data = load_tile_metrics(Path(metrics_file_path))
+    
+    # Create output directory
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    if verbose:
+        print("Generating translation distribution plots...")
+    
+    # Generate plots
+    fig_dist, axes_dist = plot_translation_distributions(metrics_data)
+    fig_dist.savefig(output_dir / "translation_distributions.png", dpi=300, bbox_inches="tight")
+    
+    if verbose:
+        print("Generating translation vector plots...")
+    
+    fig_vec, ax_vec = plot_translation_vectors(metrics_data)
+    fig_vec.savefig(output_dir / "translation_vectors.png", dpi=300, bbox_inches="tight")
+    
+    if verbose:
+        print(f"Camera alignment QC completed. Results saved to: {output_dir}")
