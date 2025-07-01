@@ -5,9 +5,9 @@ import dask.array as da
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-import zarr
 from aind_hcr_data_loader.tile_data import TileData
 from matplotlib import gridspec
+from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon
 from scipy import ndimage
 
@@ -61,19 +61,6 @@ def load_tile_data(
 #     return xmls
 
 
-def get_thyme_xmls():
-    r1 = "HCR_736963_2024-12-07_13-00-00"
-    r2 = "HCR_736963_2024-12-13_13-00-00"
-    r3 = "HCR_736963_2024-12-19_13-00-00"
-    r4 = "HCR_736963_2025-01-09_13-00-00"
-    r5 = "HCR_736963_2025-01-22_13-00-00"
-
-    round_names = [r1, r2, r3, r4, r5]
-
-    xmls = download_stitch_xmls(round_names, save_dir=Path(f"/home/matt.davis/code/hcr-stich/xml_data/"))
-    return xmls
-
-
 def map_channels_to_keys(tile_dict):
     """
     Create a mapping from channel names to lists of tile IDs.
@@ -105,7 +92,8 @@ def map_channels_to_keys(tile_dict):
                         break
                 else:
                     channel = "unknown"
-        except:
+        except Exception as e:
+            print(f"Error extracting channel from tile name '{tile_name}': {e}")
             channel = "unknown"
 
         # Add key to channel list
@@ -193,19 +181,6 @@ def channel_data_from_parsed_xml(data, channel):
         "dataset_path": dataset_path,
     }
     return channel_data
-
-
-def load_tile_data(
-    tile_name: str, bucket_name: str, dataset_path: str, pyramid_level: int = 0, dims_order: tuple = (1, 2, 0)
-) -> np.ndarray:
-    """
-    Load tile data from zarr
-    (1,2,0) is the order of the dimensions in the zarr file
-    """
-    tile_array_loc = f"{dataset_path}{tile_name}/{pyramid_level}"
-    zarr_path = f"s3://{bucket_name}/{tile_array_loc}"
-    tile_data = da.from_zarr(url=zarr_path, storage_options={"anon": False}).squeeze()
-    return tile_data.compute().transpose(dims_order)
 
 
 # def load_slice_data(tile_name: str,
@@ -768,7 +743,7 @@ class PairedTiles:
         x1_space = min(x1, self.composite_shape[2] - ox1)
 
         if z1_space < z1 or y1_space < y1 or x1_space < x1:
-            print(f"Warning: Tile1 extends beyond composite bounds. Clipping tile data.")
+            print("Warning: Tile1 extends beyond composite bounds. Clipping tile data.")
             print(f"Available space: {z1_space}, {y1_space}, {x1_space}")
 
         # Place tile1 data, clipping if necessary
@@ -786,7 +761,7 @@ class PairedTiles:
         x2_space = min(x2, self.composite_shape[2] - ox2)
 
         if z2_space < z2 or y2_space < y2 or x2_space < x2:
-            print(f"Warning: Tile2 extends beyond composite bounds. Clipping tile data.")
+            print("Warning: Tile2 extends beyond composite bounds. Clipping tile data.")
             print(f"Available space: {z2_space}, {y2_space}, {x2_space}")
 
         # Place tile2 data, clipping if necessary
@@ -1033,7 +1008,10 @@ def visualize_multichannel_paired_tiles(
             # Add clims above middle plot
             red_min, red_max = paired_tiles.percentile_values["tile1"]
             green_min, green_max = paired_tiles.percentile_values["tile2"]
-            clim_text = f"Ch {channel}\nRed min/max: {int(red_min)}-{int(red_max)}\nGreen min/max: {int(green_min)}-{int(green_max)}"
+            clim_text = (
+                f"Ch {channel}\nRed min/max: {int(red_min)}-{int(red_max)}"
+                f"\nGreen min/max: {int(green_min)}-{int(green_max)}"
+            )
             axes[i, 1].set_title(f"{clim_text}\nZX@Y={y_slice}", pad=2)
 
             axes[i, 2].set_title(f"ZY@X={x_slice}", pad=2)
@@ -1047,7 +1025,8 @@ def visualize_multichannel_paired_tiles(
             #     axes[i,j].imshow(np.zeros((100,100,3)))
             #     axes[i,j].set_title(f"Channel {channel} - Error")
 
-    # plt.suptitle(f"Orthogonal Views of Paired Tiles Across Channels\n{data['dataset_path']}\n{parsed_name1} and {parsed_name2}", fontsize=20)
+    # plt.suptitle(f"Orthogonal Views of Paired Tiles Across Channels\n{data['dataset_path']}\n"
+    #              f"{parsed_name1} and {parsed_name2}", fontsize=20)
     plt.suptitle(f"{data['dataset_path']}\n{parsed_name1} and {parsed_name2}", fontsize=20)
 
     plt.tight_layout()
@@ -1294,12 +1273,16 @@ def fig_tile_overlap_4_slices(
 
 #             try:
 #                 if ch == spots_channels[0]:
-#                     tile1 = TileData(tile1_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
-#                     tile2 = TileData(tile2_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
+#                     tile1 = TileData(tile1_name_ch, bucket_name,
+#                               data["dataset_path"], pyramid_level=pyramid_level)
+#                     tile2 = TileData(tile2_name_ch, bucket_name,
+#                                  data["dataset_path"], pyramid_level=pyramid_level)
 #                     previous_tile_data = None
 #                 else:
-#                     tile1 = tile1.average(TileData(tile1_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
-#                     tile2 = tile2.average(TileData(tile2_name_ch, bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
+#                     tile1 = tile1.average(TileData(tile1_name_ch,
+#                       bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
+#                     tile2 = tile2.average(TileData(tile2_name_ch,
+#                       bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
 #             except Exception as e:
 #                 print(f"Error loading tile {tile1_name_ch} or {tile2_name_ch}: {e}")
 #                 continue
@@ -1308,7 +1291,8 @@ def fig_tile_overlap_4_slices(
 #             print(np.max(previous_tile_data), np.max(tile1.data))
 #             previous_tile_data = tile1.data.copy()
 #             if np.max(previous_tile_data) != np.max(tile1.data):
-#                 print(f"Tile data changed for {tile1_name_ch} or {tile2_name_ch}, max value: {np.max(tile1.data)}")
+#                 print(f"Tile data changed for {tile1_name_ch} or
+#                        {tile2_name_ch}, max value: {np.max(tile1.data)}")
 #             previous_tile_data = tile1.data.copy()
 
 #     elif channel == '405':
@@ -1460,7 +1444,8 @@ def plot_tile_transforms(tile_dict, transforms, coverage_map):
     fig, ax = plt.subplots(figsize=(12, 8))
 
     # Plot the tile coverage base
-    im = ax.imshow(coverage_map, cmap="RdYlGn", interpolation="nearest", alpha=0.3)
+    # im = ax.imshow(coverage_map, cmap="RdYlGn", interpolation="nearest", alpha=0.3)
+    ax.imshow(coverage_map, cmap="RdYlGn", interpolation="nearest", alpha=0.3)
 
     # Keep track of magnitudes for color scaling
     magnitudes = []
@@ -1519,7 +1504,7 @@ def plot_tile_transforms(tile_dict, transforms, coverage_map):
     # Add scale reference
     scale_length = 1000 * scale  # Length in plot units
     ax.arrow(x_dim - 1, y_dim - 1, scale_length, 0, head_width=0.1, head_length=0.1, fc="red", ec="red", label="Scale")
-    ax.text(x_dim - 1, y_dim - 1.3, f"1000 pixels", ha="center")
+    ax.text(x_dim - 1, y_dim - 1.3, "1000 pixels", ha="center")
 
     # Add colorbar
     norm = plt.Normalize(vmin=0, vmax=max_magnitude)
@@ -1545,8 +1530,10 @@ def plot_transform_heatmaps(
      The nominal transform is the transform that maps the tile to the nominal coordinate system
      tile_dims: tuple of (x_dim, y_dim, z_dim) representing the dimensions of tile in pixels
      We use the tile_dims to remove the nominal transform from the heatmaps.
-     For X transforms, we remove the x_dim from the transform. We need to get the X coordinate index, starting from the middle.
-     So if we have 7 tiles in the X direction, the middle tile is index 3. The scale index vector in [-3,-2,-1,0,1,2,3] * tile_dims[0]
+     For X transforms, we remove the x_dim from the transform.
+     We need to get the X coordinate index, starting from the middle.
+     So if we have 7 tiles in the X direction, the middle tile is index 3.
+     The scale index vector in [-3,-2,-1,0,1,2,3] * tile_dims[0]
 
     For Y transforms, we remove the y_dim from the transform.
     """
@@ -2075,66 +2062,66 @@ def get_transformed_tile_pair(
     return combined, extent, z_slice
 
 
-def plot_adjacent_tile_pair(
-    tile1_name,
-    tile2_name,
-    transforms,
-    tile_names,
-    bucket_name,
-    dataset_path,
-    slice_index=None,
-    pyramid_level=0,
-    save=False,
-    output_dir=None,
-):
-    """
-    Plot a z-slice through two adjacent tiles in their transformed positions.
-    Transforms are relative to (0,0) at the center of the nominal grid.
-    Z-transform is applied before selecting the slice.
+# def plot_adjacent_tile_pair(
+#     tile1_name,
+#     tile2_name,
+#     transforms,
+#     tile_names,
+#     bucket_name,
+#     dataset_path,
+#     slice_index=None,
+#     pyramid_level=0,
+#     save=False,
+#     output_dir=None,
+# ):
+#     """
+#     Plot a z-slice through two adjacent tiles in their transformed positions.
+#     Transforms are relative to (0,0) at the center of the nominal grid.
+#     Z-transform is applied before selecting the slice.
 
-    Args:
-        tile1_name, tile2_name: Names of tiles to compare
-        transforms: Dictionary mapping tile IDs to transformation matrices
-        tile_names: Dictionary mapping tile IDs to tile names
-        bucket_name: S3 bucket name
-        dataset_path: Path to dataset in bucket
-        slice_index: slice index in the zarr file
-        pyramid_level: Pyramid level to load
-        save: Whether to save the plot
-        output_dir: Directory to save plot if save=True
-    """
-    # Get the transformed and combined tile data
-    combined, extent, slice = get_transformed_tile_pair(
-        tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, slice_index, pyramid_level
-    )
+#     Args:
+#         tile1_name, tile2_name: Names of tiles to compare
+#         transforms: Dictionary mapping tile IDs to transformation matrices
+#         tile_names: Dictionary mapping tile IDs to tile names
+#         bucket_name: S3 bucket name
+#         dataset_path: Path to dataset in bucket
+#         slice_index: slice index in the zarr file
+#         pyramid_level: Pyramid level to load
+#         save: Whether to save the plot
+#         output_dir: Directory to save plot if save=True
+#     """
+#     # Get the transformed and combined tile data
+#     combined, extent, slice = get_transformed_tile_pair(
+#         tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, slice_index, pyramid_level
+#     )
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 8))
-    ax.set_facecolor("black")
+#     # Create figure
+#     fig, ax = plt.subplots(figsize=(12, 8))
+#     ax.set_facecolor("black")
 
-    # Plot combined image
-    ax.imshow(combined, extent=extent)
+#     # Plot combined image
+#     ax.imshow(combined, extent=extent)
 
-    # Add tile information
-    pos1 = parse_tile_name(tile1_name)
-    pos2 = parse_tile_name(tile2_name)
-    ax.set_title(f"Tile Pair Comparison\nRed: {pos1} | Green: {pos2} | Yellow: Overlap\nZ-slice: {slice_index}")
+#     # Add tile information
+#     pos1 = parse_tile_name(tile1_name)
+#     pos2 = parse_tile_name(tile2_name)
+#     ax.set_title(f"Tile Pair Comparison\nRed: {pos1} | Green: {pos2} | Yellow: Overlap\nZ-slice: {slice_index}")
 
-    # Set axis limits with padding
-    padding = 0.05  # 5% padding
-    x_range = extent[1] - extent[0]
-    y_range = extent[3] - extent[2]
-    ax.set_xlim(extent[0] - x_range * padding, extent[1] + x_range * padding)
-    ax.set_ylim(extent[2] - y_range * padding, extent[3] + y_range * padding)
+#     # Set axis limits with padding
+#     padding = 0.05  # 5% padding
+#     x_range = extent[1] - extent[0]
+#     y_range = extent[3] - extent[2]
+#     ax.set_xlim(extent[0] - x_range * padding, extent[1] + x_range * padding)
+#     ax.set_ylim(extent[2] - y_range * padding, extent[3] + y_range * padding)
 
-    if save and output_dir:
-        output_path = Path(output_dir) / f"tile_pair_{tile1_name}_{tile2_name}_z{slice_index}.png"
-        plt.savefig(output_path)
-        plt.close()
-    else:
-        plt.show()
+#     if save and output_dir:
+#         output_path = Path(output_dir) / f"tile_pair_{tile1_name}_{tile2_name}_z{slice_index}.png"
+#         plt.savefig(output_path)
+#         plt.close()
+#     else:
+#         plt.show()
 
-    return fig, ax
+#     return fig, ax
 
 
 def plot_adjacent_tile_pair(
@@ -2724,68 +2711,6 @@ def plot_adjacent_tile_pair_zoom3(
         plt.show()
 
     return fig, ax_main
-
-
-def plot_adjacent_tile_pair_t(
-    tile1_name,
-    tile2_name,
-    transforms,
-    tile_names,
-    bucket_name,
-    dataset_path,
-    slice=None,
-    pyramid_level=0,
-    save=False,
-    output_dir=None,
-):
-    """
-    Plot a z-slice through two adjacent tiles in their transformed positions.
-    Transforms are relative to (0,0) at the center of the nominal grid.
-    Z-transform is applied before selecting the slice.
-
-    Args:
-        tile1_name, tile2_name: Names of tiles to compare
-        transforms: Dictionary mapping tile IDs to transformation matrices
-        tile_names: Dictionary mapping tile IDs to tile names
-        bucket_name: S3 bucket name
-        dataset_path: Path to dataset in bucket
-        slice: slice in
-        pyramid_level: Pyramid level to load
-        save: Whether to save the plot
-        output_dir: Directory to save plot if save=True
-    """
-    # Get the transformed and combined tile data
-    combined, extent, slice = get_transformed_tile_pair(
-        tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, slice, pyramid_level
-    )
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 8))
-    ax.set_facecolor("black")
-
-    # Plot combined image
-    ax.imshow(combined, extent=extent)
-
-    # Add tile information
-    pos1 = parse_tile_name(tile1_name)
-    pos2 = parse_tile_name(tile2_name)
-    ax.set_title(f"Tile Pair Comparison\nRed: {pos1} | Green: {pos2} | Yellow: Overlap\nZ-slice: {z_slice}")
-
-    # Set axis limits with padding
-    padding = 0.05  # 5% padding
-    x_range = extent[1] - extent[0]
-    y_range = extent[3] - extent[2]
-    ax.set_xlim(extent[0] - x_range * padding, extent[1] + x_range * padding)
-    ax.set_ylim(extent[2] - y_range * padding, extent[3] + y_range * padding)
-
-    if save and output_dir:
-        output_path = Path(output_dir) / f"tile_pair_{tile1_name}_{tile2_name}_z{z_slice}.png"
-        plt.savefig(output_path)
-        plt.close()
-    else:
-        plt.show()
-
-    return fig, ax
 
 
 def plot_all_adjacent_pairs(
@@ -3470,10 +3395,10 @@ def plot_block_accutance_heatmap(
     # Plot original image
     image_slice = tile_data[z_slice]
     if minmax_lims is None:
-        im_image = ax_image.imshow(image_slice, cmap="gray")
+        ax_image.imshow(image_slice, cmap="gray")
     else:
         vmin, vmax = np.percentile(image_slice, minmax_lims)
-        im_image = ax_image.imshow(image_slice, cmap="gray", vmin=vmin, vmax=vmax)
+        ax_image.imshow(image_slice, cmap="gray", vmin=vmin, vmax=vmax)
     ax_image.set_title(f"Original Image\nZ-slice {z_slice}")
 
     # Add grid lines to original image
@@ -3637,7 +3562,7 @@ def plot_tile_grid_block_accutance(grid_data, z_slice, show_tile_boundaries=True
         ax: Axes object
     """
     grid_accutance = grid_data["grid_accutance"]
-    coverage_map = grid_data["coverage_map"]
+    # coverage_map = grid_data["coverage_map"]
     grid_x, grid_y = grid_data["dimensions"]
     n_blocks = grid_data["blocks_per_tile"]
 
@@ -3805,7 +3730,9 @@ def calculate_normalized_accutance(image_slice, percentile_threshold=99, normali
     elif normalization_method == "structure_tensor":
         # Structure tensor approach (based on Harris corner detector)
         # This weights edge strength by local structure importance
-        gaussian_filter = lambda x, sigma: ndimage.gaussian_filter(x, sigma)
+        def gaussian_filter(x, sigma):
+            return ndimage.gaussian_filter(x, sigma)
+
         gx2 = gaussian_filter(grad_x * grad_x, 1.5)
         gy2 = gaussian_filter(grad_y * grad_y, 1.5)
         gxy = gaussian_filter(grad_x * grad_y, 1.5)
@@ -4110,7 +4037,7 @@ def plot_transformed_tiles(
     corners2 = get_tile_corners(tile2.shape, transform2_scaled)
 
     # Add pyramid level info to title
-    title = f"Transformed Tile Boundaries\n"
+    title = "Transformed Tile Boundaries\n"
     title += f"Tile 1 shape: {tile1.shape} (level {tile1.pyramid_level})\n"
     title += f"Tile 2 shape: {tile2.shape} (level {tile2.pyramid_level})"
 

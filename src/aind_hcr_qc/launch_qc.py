@@ -14,7 +14,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from aind_hcr_data_loader.hcr_dataset import HCRDataset, create_hcr_dataset
+from aind_hcr_data_loader.hcr_dataset import create_hcr_dataset
 
 import aind_hcr_qc.camera_alignment as ca
 import aind_hcr_qc.round_to_round as r2r
