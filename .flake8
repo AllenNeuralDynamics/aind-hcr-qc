@@ -7,4 +7,4 @@ exclude =
     venv
 max-complexity = 10
 max-line-length = 120
-ignore = C901, E203
+ignore = C901, E203, E226
