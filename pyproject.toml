@@ -19,7 +19,7 @@ dynamic = ["version"]
 dependencies = [
     'matplotlib',
     'numpy',
-    'scipy'
+    'scipy',
     'aind-ng-link',
     'aind-hcr-data-loader',
     'xmltodict', # needed for parsers temp hack

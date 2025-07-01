@@ -4,7 +4,7 @@
 def qc_segmentation(data_dir, output_dir, verbose=False):
     """
     Run segmentation quality control analysis.
-    
+
     Parameters:
     -----------
     data_dir : Path or str
@@ -14,6 +14,6 @@ def qc_segmentation(data_dir, output_dir, verbose=False):
     verbose : bool
         Enable verbose output
     """
-    
+
     if verbose:
         print("Segmentation QC completed successfully!")

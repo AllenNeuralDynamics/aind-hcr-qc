@@ -1,14 +1,16 @@
 """Tests for camera_alignment plotting and helper functions."""
+
 import json
+import tempfile
+import unittest
+from pathlib import Path
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import tempfile
-import unittest
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from numpy.testing import assert_allclose
-from pathlib import Path
 
 from aind_hcr_qc.camera_alignment import (
     _extract_translation_stats,
@@ -69,11 +71,13 @@ class TestCameraAlignment(unittest.TestCase):
 
         expected_dx_all = np.array([1.2, 2.4, 1.5, -2.2, -2.4, -1.9, 0.4, 0.3, 0.6])
         expected_dy_all = np.array([-0.8, -0.6, 0.4, 1.0, 1.3, 0.6, 0.2, 0.1, -0.2])
-        expected_d_all = np.concatenate([
-            expected_stats["488_561"]["d"],
-            expected_stats["561_638"]["d"],
-            expected_stats["638_750"]["d"],
-        ])
+        expected_d_all = np.concatenate(
+            [
+                expected_stats["488_561"]["d"],
+                expected_stats["561_638"]["d"],
+                expected_stats["638_750"]["d"],
+            ]
+        )
 
         # Assertions
         self.assertEqual(stats.keys(), expected_stats.keys())
@@ -118,7 +122,7 @@ class TestCameraAlignment(unittest.TestCase):
     def test_load_tile_metrics(self):
         """Test loading tile metrics from JSON file."""
         # Create a temporary JSON file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(sample_metrics_data, f)
             temp_path = Path(f.name)
 
@@ -131,5 +135,5 @@ class TestCameraAlignment(unittest.TestCase):
             temp_path.unlink()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

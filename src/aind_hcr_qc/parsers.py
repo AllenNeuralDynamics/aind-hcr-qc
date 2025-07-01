@@ -5,7 +5,6 @@ from typing import Dict, List, OrderedDict, Tuple
 import numpy as np
 import xmltodict
 import zarr
-
 from ng_link import link_utils
 
 
@@ -47,19 +46,11 @@ class OmeZarrParser:
                 if ds["path"] == res:
                     coord_transforms = ds.get("coordinateTransformations", [])
                     scale = next(
-                        (
-                            t["scale"]
-                            for t in coord_transforms
-                            if t["type"] == "scale"
-                        ),
+                        (t["scale"] for t in coord_transforms if t["type"] == "scale"),
                         None,
                     )
                     translation = next(
-                        (
-                            t["translation"]
-                            for t in coord_transforms
-                            if t["type"] == "translation"
-                        ),
+                        (t["translation"] for t in coord_transforms if t["type"] == "translation"),
                         None,
                     )
                     transformations = {
@@ -88,13 +79,9 @@ class OmeZarrParser:
         Tuple[tuple, Dict[int, str], Dict[int, np.ndarray]]
             A tuple containing voxel sizes, tile paths, and tile offsets.
         """
-        vox_sizes: tuple[float, float, float] = (
-            OmeZarrParser.extract_tile_vox_size(s3_path)
-        )
+        vox_sizes: tuple[float, float, float] = OmeZarrParser.extract_tile_vox_size(s3_path)
         tile_paths: dict[int, str] = OmeZarrParser.extract_tile_paths(s3_path)
-        net_transforms: dict[int, np.ndarray] = (
-            OmeZarrParser._get_identity_mats(s3_path)
-        )
+        net_transforms: dict[int, np.ndarray] = OmeZarrParser._get_identity_mats(s3_path)
         return vox_sizes, tile_paths, net_transforms
 
     @staticmethod
@@ -133,11 +120,7 @@ class OmeZarrParser:
         z = zarr.open(zarr_path, mode="r")
         first_tile = z[next(iter(z.keys()))]
 
-        return tuple(
-            reversed(
-                OmeZarrParser.parse_transform(first_tile, "0")["scale"][2:]
-            )
-        )
+        return tuple(reversed(OmeZarrParser.parse_transform(first_tile, "0")["scale"][2:]))
 
     @staticmethod
     def _get_identity_mats(zarr_path: str) -> Dict[int, np.ndarray]:
@@ -189,9 +172,7 @@ class XmlParser:
         with open(xml_path, "r") as file:
             data: OrderedDict = xmltodict.parse(file.read())
 
-        dataset_path = data["SpimData"]["SequenceDescription"]["ImageLoader"][
-            "zarr"
-        ]
+        dataset_path = data["SpimData"]["SequenceDescription"]["ImageLoader"]["zarr"]
 
         return dataset_path["#text"]
 
@@ -215,12 +196,8 @@ class XmlParser:
         with open(xml_path, "r") as file:
             data: OrderedDict = xmltodict.parse(file.read())
 
-        for n, zgroup in enumerate(
-            data["SpimData"]["SequenceDescription"]["ImageLoader"]["zgroups"][
-                "zgroup"
-            ]
-        ):
-            #print(zgroup)
+        for n, zgroup in enumerate(data["SpimData"]["SequenceDescription"]["ImageLoader"]["zgroups"]["zgroup"]):
+            # print(zgroup)
             view_paths[int(zgroup["@setup"])] = zgroup["path"]
 
         return view_paths
@@ -244,9 +221,7 @@ class XmlParser:
         with open(xml_path, "r") as file:
             data: OrderedDict = xmltodict.parse(file.read())
 
-        first_tile_metadata = data["SpimData"]["SequenceDescription"][
-            "ViewSetups"
-        ]["ViewSetup"][0]
+        first_tile_metadata = data["SpimData"]["SequenceDescription"]["ViewSetups"]["ViewSetup"][0]
         vox_sizes: str = first_tile_metadata["voxelSize"]["size"]
         return tuple(float(val) for val in vox_sizes.split(" "))
 
@@ -271,17 +246,13 @@ class XmlParser:
         with open(xml_path, "r") as file:
             data: OrderedDict = xmltodict.parse(file.read())
 
-        for view_reg in data["SpimData"]["ViewRegistrations"][
-            "ViewRegistration"
-        ]:
+        for view_reg in data["SpimData"]["ViewRegistrations"]["ViewRegistration"]:
             tfm_stack = view_reg["ViewTransform"]
             if not isinstance(tfm_stack, list):
                 tfm_stack = [tfm_stack]
             view_transforms[int(view_reg["@setup"])] = tfm_stack
 
-        view_transforms = {
-            view: tfs[::-1] for view, tfs in view_transforms.items()
-        }
+        view_transforms = {view: tfs[::-1] for view, tfs in view_transforms.items()}
 
         return view_transforms
 
@@ -303,17 +274,11 @@ class XmlParser:
         Tuple[tuple, Dict[int, str], Dict[int, np.ndarray]]
             A tuple containing voxel sizes, tile paths, and tile offsets.
         """
-        vox_sizes: tuple[float, float, float] = (
-            XmlParser.extract_tile_vox_size(xml_path)
-        )
+        vox_sizes: tuple[float, float, float] = XmlParser.extract_tile_vox_size(xml_path)
         tile_paths: dict[int, str] = XmlParser.extract_tile_paths(xml_path)
-        tile_transforms: dict[int, list[dict]] = (
-            XmlParser.extract_tile_transforms(xml_path)
-        )
+        tile_transforms: dict[int, list[dict]] = XmlParser.extract_tile_transforms(xml_path)
         XmlParser.omit_initial_offsets(tile_transforms)
-        net_transforms: dict[int, np.ndarray] = (
-            link_utils.calculate_net_transforms(tile_transforms)
-        )
+        net_transforms: dict[int, np.ndarray] = link_utils.calculate_net_transforms(tile_transforms)
         return vox_sizes, tile_paths, net_transforms
 
     @staticmethod
