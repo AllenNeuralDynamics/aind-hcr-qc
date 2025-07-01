@@ -1217,7 +1217,7 @@ def fig_tile_overlap_4_slices(tile1_name,
         tile1 = TileData(tile1_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
         tile2 = TileData(tile2_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
 
-    padding_dict = {0: 75, 1: 50, 2: 30, 3: 10}
+    padding_dict = {0: 75, 1: 50, 2: 30, 3: 10, 4: 5, 5: 2}
     padding = padding_dict.get(pyramid_level, 50)  # Default to 50 if not found
 
     # look up the values in data["tile_names"] to get the ids (which is the key)
@@ -4180,7 +4180,7 @@ def visualize_orthogonal_views(self, z_slice=None, y_slice=None, x_slice=None, o
 # ---
 # Tile Alignment QC
 # ---
-def qc_tile_alignment(stitched_xml, pairs, save_dir, bucket_name="aind-open-data", pyramid_level=3):
+def qc_tile_alignment(stitched_xml, pairs, save_dir, bucket_name="aind-open-data", pyramid_level=0):
     """
     Generate tile alignment QC plots for all adjacent pairs.
     
@@ -4222,7 +4222,7 @@ def qc_tile_alignment(stitched_xml, pairs, save_dir, bucket_name="aind-open-data
                     pyramid_level=pyramid_level,
                     channel=channel,
                     save=True,
-                    output_dir=save_dir
+                    output_dir=save_dir / "overlap_xy"
                 )
                 
             except Exception as e:

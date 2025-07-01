@@ -15,8 +15,3 @@ def qc_round_to_round(data_dir, output_dir, channels=None, verbose=False):
     
     if verbose:
         print("Round-to-round QC completed successfully!")
-
-
-def dummy_func():
-    """Dummy function"""
-    pass

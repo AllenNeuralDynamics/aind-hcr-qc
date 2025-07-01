@@ -4,10 +4,6 @@ QC Launcher Script for AIND HCR Data Quality Control
 
 This script provides a unified interface to run various quality control analyses
 on HCR (Hybridization Chain Reaction) data. Each QC type can be enabled via command-line flags.
-
-
-TODO:
-+ can it detect pipeline or capsule run?
 """
 
 import argparse
@@ -22,7 +18,7 @@ import aind_hcr_qc.segmentation as seg
 import aind_hcr_qc.spectral_unmixing as su
 import aind_hcr_qc.spots as spots
 
-from aind_hcr_data_loader.hcr_dataset import HCRDataset
+from aind_hcr_data_loader.hcr_dataset import create_hcr_dataset
 
 
 def setup_argument_parser():
@@ -31,31 +27,23 @@ def setup_argument_parser():
         description="Run HCR data quality control analyses",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    # add --dataset argument to specify the dataset
-    parser.add_argument(
-        "--dataset", 
-        type=str,
-        required=True,
-        help="Dataset to use for QC analysis"
-    )
+    
     # Input/output arguments
-    # parser.add_argument(
-    #     "--config-file", 
-    #     type=Path,
-    #     help="Path to configuration file (e.g., BigStitcher XML for tile alignment)"
-    # )
+    parser.add_argument(
+        "--config-file", 
+        type=Path,
+        help="Path to configuration file (e.g., BigStitcher XML for tile alignment)"
+    )
     parser.add_argument(
         "--data-dir", 
         type=Path,
         help="Path to data directory"
-        default="../data",
     )
     parser.add_argument(
         "--output-dir", 
         type=Path, 
         required=True,
         help="Directory to save QC outputs"
-        default="../results"
     )
     parser.add_argument(
         "--bucket-name", 
@@ -108,6 +96,43 @@ def setup_argument_parser():
         default=False,
         help="Run all QC analyses"
     )
+    
+    # Analysis parameters
+    params_group = parser.add_argument_group("Analysis Parameters")
+    params_group.add_argument(
+        "--pyramid-level", 
+        type=int, 
+        default=3,
+        help="Pyramid level for tile-based analyses"
+    )
+    params_group.add_argument(
+        "--include-diagonals", 
+        action="store_true", 
+        default=False,
+        help="Include diagonal tile pairs in tile alignment analysis"
+    )
+    params_group.add_argument(
+        "--channels", 
+        nargs="+", 
+        default=["405", "488", "514", "561", "594", "638"],
+        help="Channels to analyze"
+    )
+    
+    # Processing options
+    proc_group = parser.add_argument_group("Processing Options")
+    proc_group.add_argument(
+        "--verbose", 
+        action="store_true", 
+        default=False,
+        help="Enable verbose output"
+    )
+    proc_group.add_argument(
+        "--dry-run", 
+        action="store_true", 
+        default=False,
+        help="Show what would be run without executing"
+    )
+    
     return parser
 
 
@@ -117,22 +142,18 @@ def qc_tile_alignment_wrapper(args):
     print("RUNNING TILE ALIGNMENT QC")
     print("=" * 60)
     
-    # if not args.config_file or not args.config_file.exists():
-    #     raise FileNotFoundError(f"BigStitcher XML file not found: {args.config_file}")
+    if not args.config_file or not args.config_file.exists():
+        raise FileNotFoundError(f"BigStitcher XML file not found: {args.config_file}")
     
-    
-    # get HCRDataset?
-    dataset_dir = Path(args.data_dir) / args.dataset
-
     # Parse BigStitcher XML
     print(f"Parsing BigStitcher XML: {args.config_file}")
     stitched_xml = ta.parse_bigstitcher_xml(args.config_file)
-
+    
     # Get adjacent tile pairs
     print("Finding adjacent tile pairs...")
     pairs = ta.get_all_adjacent_pairs(
         stitched_xml["tile_names"], 
-        include_diagonals=False
+        include_diagonals=args.include_diagonals
     )
     print(f"Found {len(pairs)} adjacent tile pairs")
     
@@ -266,15 +287,9 @@ def main():
     """Main function to run QC analyses based on command-line arguments."""
     parser = setup_argument_parser()
     args = parser.parse_args()
-
+    
     # Ensure output directory exists
     args.output_dir.mkdir(parents=True, exist_ok=True)
-
-    # check dataset folder is in data directory (needed for capsule mode)
-    dataset_dir = Path(args.data_dir) / args.dataset
-    if not dataset_dir.exists():
-        print(f"ERROR: Dataset directory does not exist: {dataset_dir}")
-        sys.exit(1)
     
     # Check if any QC type is specified
     qc_types = [
@@ -291,6 +306,33 @@ def main():
         print("ERROR: No QC type specified. Use --help for available options.")
         sys.exit(1)
     
+    # Show configuration if verbose or dry run
+    if args.verbose or args.dry_run:
+        print("QC Configuration:")
+        print(f"  Config file: {args.config_file}")
+        print(f"  Data directory: {args.data_dir}")
+        print(f"  Output directory: {args.output_dir}")
+        print(f"  Bucket name: {args.bucket_name}")
+        print(f"  Pyramid level: {args.pyramid_level}")
+        print(f"  Channels: {args.channels}")
+        print(f"  Include diagonals: {args.include_diagonals}")
+        print()
+    
+    if args.dry_run:
+        print("DRY RUN MODE - No analyses will be executed")
+        if args.all or args.tile_alignment:
+            print("Would run: Tile Alignment QC")
+        if args.all or args.camera_alignment:
+            print("Would run: Camera Alignment QC")
+        if args.all or args.segmentation:
+            print("Would run: Segmentation QC")
+        if args.all or args.round_to_round:
+            print("Would run: Round-to-Round QC")
+        if args.all or args.spectral_unmixing:
+            print("Would run: Spectral Unmixing QC")
+        if args.all or args.spot_detection:
+            print("Would run: Spot Detection QC")
+        return
     
     # Run requested QC analyses
     try:
@@ -315,7 +357,7 @@ def main():
         print("\n" + "=" * 60)
         print("ALL QC ANALYSES COMPLETED SUCCESSFULLY!")
         print("=" * 60)
-        print(f"Results saved to: {output_dir}")
+        print(f"Results saved to: {args.output_dir}")
         
     except Exception as e:
         print(f"\nERROR: QC analysis failed with error: {e}")

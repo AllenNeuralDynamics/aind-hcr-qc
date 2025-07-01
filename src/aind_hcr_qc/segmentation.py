@@ -1,7 +1,7 @@
 """Segmentation"""
 
 
-def qc_segmentation(data_dir, output_dir, channels=None, verbose=False):
+def qc_segmentation(data_dir, output_dir, verbose=False):
     """
     Run segmentation quality control analysis.
     
@@ -17,8 +17,3 @@ def qc_segmentation(data_dir, output_dir, channels=None, verbose=False):
     
     if verbose:
         print("Segmentation QC completed successfully!")
-
-
-def dummy_func():
-    """Dummy function"""
-    pass
