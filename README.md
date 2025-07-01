@@ -7,6 +7,30 @@
 ![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen?logo=codecov)
 ![Python](https://img.shields.io/badge/python->=3.10-blue?logo=python)
 
+## About
+
+Quality control analysis for AIND HCR data processing. Provides tools for validating tile alignment, camera alignment, segmentation, spectral unmixing, and spot detection.
+
+**Use Cases:**
+1. **Interactive analysis** - Within a capsule/cloud workstation:
+
+    + Make sure processed HCR data asset is attached to capsule
+
+
+   ```bash
+   // run just tile_alignment
+   python launch_qc.py --dataset HCR_788639-25_2025-06-06_13-00-00_processed_2025-06-17_07-08-14 --output-dir /root/capsule/scratch/qc-test --tile-alignment --pyramid-level 4
+   ```
+
+   ```bash
+   // run all qc 
+   python launch_qc.py --dataset HCR_788639-25_2025-06-06_13-00-00_processed_2025-06-17_07-08-14 --output-dir /root/capsule/scratch/qc-test --all --pyramid-level 0 
+   ```
+2. **Reproducible runs** - With parameter files *(not implemented yet)*
+3. **Pipeline integration** - As automated QC steps *(not implemented yet)*
+
+Intergration will AIND QC portal will happen when team identifies and evaluates essential plots.
+
 
 ## Installation
 To use the software, in the root directory, run
@@ -22,45 +46,20 @@ pip install -e .[dev]
 ## Contributing
 
 ### Linters and testing
-
-There are several libraries used to run linters, check documentation, and run tests.
-
-- Please test your changes using the **coverage** library, which will run the tests and log a coverage report:
-
-```bash
-coverage run -m unittest discover && coverage report
-```
-Note: `cd /src/hcr-data-qc && coverage run -m pytest tests/test_camera_alignment.py && coverage report` working better
-
-- Use **interrogate** to check that modules, methods, etc. have been documented thoroughly:
-
-```bash
-interrogate .
-```
-
-- Use **flake8** to check that code is up to standards (no unused imports, etc.):
-```bash
-flake8 .
-```
-
-- Use **black** to automatically format the code into PEP standards:
-```bash
-black .
-```
-
-- Use **isort** to automatically sort import statements:
-```bash
-isort .
-```
+Run `pre_commit_checks.py`, which includes coverage, black, isort, flake8, & interrogate
 
 ### Pull requests
 
-For internal members, please create a branch. For external members, please fork the repository and open a pull request from the fork. We'll primarily use [Angular](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#commit) style for commit messages. Roughly, they should follow the pattern:
++ **Internal members** please create a branch. 
++ **External members** please fork the repository and open a pull request from the fork. 
+
+### Commits
+We'll primarily use [Angular](https://github.com/angular/angular/blob/main/CONTRIBUTING.md#commit) style for commit messages. Roughly, they should follow the pattern:
 ```text
-<type>(<scope>): <short summary>
+<type>: <short summary>
 ```
 
-where scope (optional) describes the packages affected by the code changes and type (mandatory) is one of:
+type is one of:
 
 - **build**: Changes that affect build tools or external dependencies (example scopes: pyproject.toml, setup.py)
 - **ci**: Changes to our CI configuration files and scripts (examples: .github/workflows/ci.yml)
@@ -70,4 +69,3 @@ where scope (optional) describes the packages affected by the code changes and t
 - **perf**: A code change that improves performance
 - **refactor**: A code change that neither fixes a bug nor adds a feature
 - **test**: Adding missing tests or correcting existing tests
-
