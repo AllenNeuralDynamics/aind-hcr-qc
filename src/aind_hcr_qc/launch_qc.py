@@ -14,6 +14,31 @@ import argparse
 import sys
 from pathlib import Path
 
+
+def str2bool(v):
+    """Convert string representation to boolean value.
+
+    Args:
+        v: Input value to convert to boolean. Can be string or bool.
+            Accepted string values (case insensitive):
+            - True: 'yes', 'true', 't', 'y', '1'
+            - False: 'no', 'false', 'f', 'n', '0'
+
+    Returns:
+        bool: The converted boolean value
+
+    Raises:
+        argparse.ArgumentTypeError: If input cannot be converted to boolean
+    """
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 from aind_hcr_data_loader.hcr_dataset import create_hcr_dataset
 
 import aind_hcr_qc.camera_alignment as ca
@@ -52,17 +77,17 @@ def setup_argument_parser():
 
     # QC type flags (all default to False)
     qc_group = parser.add_argument_group("QC Types")
-    qc_group.add_argument("--tile-alignment", action="store_true", default=False, help="Run tile alignment QC analysis")
+    qc_group.add_argument("--tile-alignment", type=str2bool, default=False, help="Run tile alignment QC analysis")
     qc_group.add_argument(
-        "--camera-alignment", action="store_true", default=False, help="Run camera alignment QC analysis"
+        "--camera-alignment", type=str2bool, default=False, help="Run camera alignment QC analysis"
     )
-    qc_group.add_argument("--segmentation", action="store_true", default=False, help="Run segmentation QC analysis")
-    qc_group.add_argument("--round-to-round", action="store_true", default=False, help="Run round-to-round QC analysis")
+    qc_group.add_argument("--segmentation", type=str2bool, default=False, help="Run segmentation QC analysis")
+    qc_group.add_argument("--round-to-round", type=str2bool, default=False, help="Run round-to-round QC analysis")
     qc_group.add_argument(
-        "--spectral-unmixing", action="store_true", default=False, help="Run spectral unmixing QC analysis"
+        "--spectral-unmixing", type=str2bool, default=False, help="Run spectral unmixing QC analysis"
     )
-    qc_group.add_argument("--spot-detection", action="store_true", default=False, help="Run spot detection QC analysis")
-    qc_group.add_argument("--all", action="store_true", default=False, help="Run all QC analyses")
+    qc_group.add_argument("--spot-detection", type=str2bool, default=False, help="Run spot detection QC analysis")
+    qc_group.add_argument("--all", type=str2bool, default=False, help="Run all QC analyses")
 
     # Additional arguments
     # pyramid level for tile alignment
