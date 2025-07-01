@@ -1038,6 +1038,14 @@ def visualize_multichannel_paired_tiles(
 def visualize_paired_tiles(
     tile1_name, tile2_name, data, pyramid_level=1, bucket_name="aind-open-data", overlap_only=False, padding="auto"
 ):
+    """Visualize orthogonal views of a pair of tiles.
+    Parameters:
+    -----------
+    tile1_name : str
+        Name of the first tile
+    tile2_name : str
+        Name of the second tile
+    """
 
     # 20 is good for pyramid level 3, scale up for lower levels by factor of 4
     if padding == "auto":
@@ -1150,6 +1158,7 @@ def fig_tile_overlap_4_slices(
     output_dir=None,
     verbose=False,
 ):
+    """Create fig"""
 
     # Create TileData objects
     if channel == "spots-avg":
