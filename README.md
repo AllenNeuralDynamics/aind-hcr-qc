@@ -12,7 +12,7 @@
 Quality control analysis for AIND HCR data processing. Provides tools for validating tile alignment, camera alignment, segmentation, spectral unmixing, and spot detection.
 
 **Use Cases:**
-1. **Interactive analysis** - Within a capsule/cloud workstation:
+1. **Interactive analysis** - Within a CodeOcean capsule/cloud workstation (or local machine):
 
     + Make sure processed HCR data asset is attached to capsule
 
@@ -26,8 +26,9 @@ Quality control analysis for AIND HCR data processing. Provides tools for valida
    // run all qc 
    python launch_qc.py --dataset HCR_788639-25_2025-06-06_13-00-00_processed_2025-06-17_07-08-14 --output-dir /root/capsule/scratch/qc-test --all --pyramid-level 0 
    ```
-2. **Reproducible runs** - With parameter files *(not implemented yet)*
-3. **Pipeline integration** - As automated QC steps *(not implemented yet)*
+2. **Reproducible runs** - With CodeOcean app panel
+    + See [HCR QC Kickoff capsule](https://codeocean.allenneuraldynamics.org/capsule/8714887/tree)
+4. **Pipeline integration** - As automated QC steps *(not implemented yet)*
 
 Intergration will AIND QC portal will happen when team identifies and evaluates essential plots.
 
