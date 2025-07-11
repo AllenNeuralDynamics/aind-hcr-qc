@@ -5,9 +5,13 @@ import seaborn as sns
 import numpy as np
 import pandas as pd
 
-def plot_spot_count(cxg_data, color_dict=None, volume_filter=True, 
-                        volume_percentiles=(5, 95), log_plot = True, figsize=(12, 4),
-                        min_n_spots=2):
+def plot_spot_count(cxg_data, 
+                    color_dict=None, 
+                    volume_filter=True, 
+                    volume_percentiles=(5, 95), 
+                    log_plot = True, 
+                    figsize=(12, 4),
+                    min_n_spots=0):
     """
     Create a comprehensive QC figure for spot count distributions by gene.
     
