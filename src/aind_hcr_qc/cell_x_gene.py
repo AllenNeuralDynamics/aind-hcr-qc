@@ -163,7 +163,27 @@ def plot_cell_x_gene_clustered(cxg,
 
     return fig, cluster_labels
 
+# ------------------------
+# mean flouresence
+# ------------------------
 
+def cell_mean_centroid_df(dataset, mean_csv, round_key):
+    # filter volume with 5 - 95 percentile
+    cell_info = dataset.rounds[round_key].get_cell_info() # Double check if the right cells..., since R1 is default in loader
+    
+    # filter volume
+    cell_info = cell_info[(cell_info["volume"] > cell_info["volume"].quantile(0.05)) & (cell_info["volume"] < cell_info["volume"].quantile(0.95))]
+    filt_cells = cell_info.cell_id.values
+
+    mean_df = pd.read_csv(mean_csv)
+    # merge with cell_info
+    mean_df = mean_df.merge(cell_info, on='cell_id', how='left')
+
+    # filter by cell_id
+    mean_df = mean_df[mean_df['cell_id'].isin(filt_cells)]
+
+    print(f"Filtered mean_df shape: {mean_df.shape}")
+    return mean_df
 
 def plot_centroids(df, 
                    orientation='XY', 
