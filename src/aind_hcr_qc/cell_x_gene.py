@@ -67,7 +67,8 @@ def plot_cell_x_gene_clustered(cxg,
                               sort_gene=None,
                               fig_size=(4, 6),
                               k=3,
-                              add_cluster_labels=True):
+                              add_cluster_labels=True,
+                              cbar_label='Gene Expression Count'):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
 
@@ -134,7 +135,7 @@ def plot_cell_x_gene_clustered(cxg,
     
     # show colorbar
     cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Gene Expression Count', rotation=270, labelpad=20)
+    cbar.set_label(cbar_label, rotation=270, labelpad=20)
     cbar.ax.tick_params(labelsize=10)
 
     # add gene names from dataframe
