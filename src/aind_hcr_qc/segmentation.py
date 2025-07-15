@@ -62,7 +62,8 @@ def plot_cell_volume_and_diameter(cell_df, q1=None, q2=None,
                     linewidth=1, label=f'max_per: ({q2})')
     ax1.axvline(cell_df["volume"].median(), color='black', linestyle='dashed',
                 linewidth=1, label=f'median: {int(cell_df["volume"].median())} voxels')
-    ax1.set_title('Cell Volume Distribution')
+    n_rois = cell_df.shape[0]
+    ax1.set_title(f'Cell Volume Distribution (n_rois={n_rois})')
     ax1.set_xlabel('Cell Volume (voxels)')
     ax1.set_ylabel('Frequency')
     # sci notation for x axis
@@ -86,7 +87,7 @@ def plot_cell_volume_and_diameter(cell_df, q1=None, q2=None,
                     linewidth=1, label=f'max_per: ({q2})')
     ax2.axvline(diameters.median(), color='black', linestyle='dashed', 
                 linewidth=1, label=f'median: {diameters.median():.2f} µm')
-                
+
     ax2.set_title('Estimated Cell Diameter (assuming sphere)')
     ax2.set_xlabel('Estimated Diameter (µm)')
     ax2.set_ylabel('Density')
@@ -108,6 +109,7 @@ def plot_cell_volume_and_diameter(cell_df, q1=None, q2=None,
 
 
 def filter_cell_info(cell_info, q1=0.2, q2=0.95):
+    # TODO: add to HCRDataset and make smarter
     n_cells = cell_info.shape[0]
     cell_info = cell_info[(cell_info["volume"] > cell_info["volume"].quantile(q1)) & (cell_info["volume"] < cell_info["volume"].quantile(q2))]
     print(f"Kept {cell_info.shape[0]} cells out of {n_cells} total cells, based on volume quantiles {q1} and {q2}.")
@@ -166,6 +168,141 @@ def fig_centroids_filtered(cell_info, q1=0.2, q2=0.95, save=False, output_dir=No
         print(f"Figure saved to: {fig_path}")
     
     return fig, cell_df_filt
+
+
+def plot_centroids(df, 
+                   orientation='XY', 
+                   n_samples=None,
+                   color_col=None,
+                   cmap='Blues',
+                   clip_range=(None, None),
+                   xlims=(None, None),
+                   ylims=(None, None),
+                   random_state=42,
+                   ax=None):
+    """
+    Plot cell centroids in different orientations
+
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame containing centroid coordinates
+    orientation : str
+        One of 'XY', 'ZX', or 'ZY'
+    n_samples : int
+        Number of random cells to plot
+    random_state : int
+        Random seed for reproducibility
+    ax : matplotlib.axes.Axes, optional
+        Axes object to plot on. If None, creates a new figure and axes.
+    """
+    # Sample random cells
+    if n_samples is not None:
+        df = df.sample(n=n_samples, random_state=random_state)
+
+    # if clip_range is specified, clip the color_col
+    if color_col is not None:
+        if color_col not in df.columns:
+            raise ValueError(f"Color column '{color_col}' not found in DataFrame.")
+        df = df.copy()
+        df[color_col] = df[color_col].clip(lower=clip_range[0], upper=clip_range[1])
+
+    # Define coordinate mappings
+    coords = {
+        'XY': ('x_centroid', 'y_centroid', 'XY Plane'),
+        'ZX': ('x_centroid', 'z_centroid', 'ZX Plane'),
+        'ZY': ('y_centroid', 'z_centroid', 'ZY Plane')
+    }
+
+    if orientation not in coords:
+        raise ValueError("Orientation must be one of: 'XY', 'ZX', 'ZY'")
+
+    x_coord, y_coord, plane = coords[orientation]
+
+    # Create axes if not provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 10))
+    else:
+        fig = ax.figure
+
+    # use color col to set colorbar of scatter values
+    if color_col is not None:
+        scatter = ax.scatter(df[x_coord], df[y_coord], alpha=0.5, 
+                             c=df[color_col], cmap=cmap, s=4)
+        # Add colorbar
+        cbar = fig.colorbar(scatter, ax=ax)
+        cbar.set_label(color_col, rotation=270, labelpad=15)
+    else:
+        ax.scatter(df[x_coord], df[y_coord], alpha=0.3, s=4)
+    if xlims[0] is not None or xlims[1] is not None:
+        ax.set_xlim(xlims[0], xlims[1])
+    else:
+        ax.set_xlim(df[x_coord].min() - 10, df[x_coord].max() + 10)
+    if ylims[0] is not None or ylims[1] is not None:
+        ax.set_ylim(ylims[0], ylims[1])
+    else:
+        ax.set_ylim(df[y_coord].min() - 10, df[y_coord].max() + 10)
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlabel(f'{x_coord}')
+    ax.set_ylabel(f'{y_coord}')
+    ax.set_title(f'Cell Centroids - {plane} (n={n_samples if n_samples is not None else len(df)})')
+
+    # Reverse y-axis for ZX, ZY, and XY
+    if orientation in ['ZX', 'ZY', 'XY']:
+        ax.invert_yaxis()
+
+    if ax is None:
+        plt.show()
+    return ax
+
+
+def fig_cell_centroids_comparison(cell_df, cell_df_filt, orientation="XY", save=False, output_dir=None):
+    """
+    Plot cell centroids before and after filtering side by side.
+    
+    Args:
+        cell_df (pd.DataFrame): Original cell information
+        cell_df_filt (pd.DataFrame): Filtered cell information
+        orientation (str): Orientation of the plot ("XY", "XZ", or "YZ")
+        save (bool): Whether to save the plot
+        output_dir (Path or str): Directory to save the plot (required if save=True)
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 8))
+
+    # add warning, ZY, ZX not supported yet
+    if orientation not in ["XY", "XZ", "YZ"]:
+        raise ValueError("Orientation must be one of 'XY', 'XZ', or 'YZ'")
+    if orientation in ["ZY", "ZX"]:
+        print("Warning: ZY and ZX orientations are not supported yet. Defaulting to XY.")
+        orientation = "XY"
+
+    # get max x and y values for scaling
+    max_x = max(cell_df['x_centroid'].max(), cell_df_filt['x_centroid'].max())
+    max_y = max(cell_df['y_centroid'].max(), cell_df_filt['y_centroid'].max())
+    max_z = max(cell_df['z_centroid'].max(), cell_df_filt['z_centroid'].max())
+    
+    # Plot original data
+    plot_centroids(cell_df, orientation=orientation, color_col=None, ax=ax1, 
+                       xlims=(0, max_x), ylims=(0, max_y),)
+    ax1.set_title(f"Original Cells (n={len(cell_df)})")
+    
+    # Plot filtered data
+    plot_centroids(cell_df_filt, orientation=orientation, color_col=None, ax=ax2,
+                       xlims=(0, max_x), ylims=(0, max_y))
+    ax2.set_title(f"Filtered Cells (n={len(cell_df_filt)})")
+    
+    #plt.suptitle(f"Cell Centroids Comparison - {orientation} View")
+
+    plt.tight_layout()
+    
+    if save:
+        if output_dir is None:
+            raise ValueError("output_dir must be specified when save=True")
+        output_path = Path(output_dir) / f"cell_centroids_comparison_{orientation}.png"
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"Saved plot to {output_path}")
+    
+    plt.show()
 
 def qc_segmentation(dataset: HCRDataset, 
                     data_dir = Path("/root/capsule/data"), 
