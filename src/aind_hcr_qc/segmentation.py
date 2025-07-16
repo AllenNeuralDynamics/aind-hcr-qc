@@ -233,7 +233,7 @@ def plot_centroids(df,
         cbar = fig.colorbar(scatter, ax=ax)
         cbar.set_label(color_col, rotation=270, labelpad=15)
     else:
-        ax.scatter(df[x_coord], df[y_coord], alpha=0.3, s=4)
+        ax.scatter(df[x_coord], df[y_coord], alpha=0.3, s=1)
     if xlims[0] is not None or xlims[1] is not None:
         ax.set_xlim(xlims[0], xlims[1])
     else:
@@ -263,36 +263,55 @@ def fig_cell_centroids_comparison(cell_df, cell_df_filt, orientation="XY", save=
     Args:
         cell_df (pd.DataFrame): Original cell information
         cell_df_filt (pd.DataFrame): Filtered cell information
-        orientation (str): Orientation of the plot ("XY", "XZ", or "YZ")
+        orientation (str): Orientation of the plot ("XY", "ZX", or "ZY")
         save (bool): Whether to save the plot
         output_dir (Path or str): Directory to save the plot (required if save=True)
     """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 8))
 
-    # add warning, ZY, ZX not supported yet
-    if orientation not in ["XY", "XZ", "YZ"]:
-        raise ValueError("Orientation must be one of 'XY', 'XZ', or 'YZ'")
-    if orientation in ["ZY", "ZX"]:
-        print("Warning: ZY and ZX orientations are not supported yet. Defaulting to XY.")
-        orientation = "XY"
+    # if xy, 1,2 else 2,1
+    n_row = 1 if orientation == "XY" else 2
+    n_col = 2 if orientation == "XY" else 1
+    fig, (ax1, ax2) = plt.subplots(n_row, n_col, figsize=(8, 8))
 
-    # get max x and y values for scaling
-    max_x = max(cell_df['x_centroid'].max(), cell_df_filt['x_centroid'].max())
-    max_y = max(cell_df['y_centroid'].max(), cell_df_filt['y_centroid'].max())
-    max_z = max(cell_df['z_centroid'].max(), cell_df_filt['z_centroid'].max())
+    # Define orientation mappings for coords and limits
+    orientation_maps = {
+        'XY': {'x': 'x_centroid', 'y': 'y_centroid'},
+        'ZX': {'x': 'x_centroid', 'y': 'z_centroid'},
+        'ZY': {'x': 'y_centroid', 'y': 'z_centroid'}
+    }
+    
+    if orientation not in orientation_maps:
+        raise ValueError("Orientation must be one of 'XY', 'ZX', or 'ZY'")
+    
+    x_coord = orientation_maps[orientation]['x']
+    y_coord = orientation_maps[orientation]['y']
+    
+    # get max x and y values for scaling based on the orientation
+    max_x = max(cell_df[x_coord].max(), cell_df_filt[x_coord].max())
+    min_x = min(cell_df[x_coord].min(), cell_df_filt[x_coord].min())
+    max_y = max(cell_df[y_coord].max(), cell_df_filt[y_coord].max())
+    min_y = min(cell_df[y_coord].min(), cell_df_filt[y_coord].min())
+    
+    # Add some padding to the limits
+    padding_x = (max_x - min_x) * 0.05
+    padding_y = (max_y - min_y) * 0.05
+    xlims = (min_x - padding_x, max_x + padding_x)
+    ylims = (min_y - padding_y, max_y + padding_y)
     
     # Plot original data
     plot_centroids(cell_df, orientation=orientation, color_col=None, ax=ax1, 
-                       xlims=(0, max_x), ylims=(0, max_y),)
+                   xlims=xlims, ylims=ylims)
     ax1.set_title(f"Original Cells (n={len(cell_df)})")
     
     # Plot filtered data
     plot_centroids(cell_df_filt, orientation=orientation, color_col=None, ax=ax2,
-                       xlims=(0, max_x), ylims=(0, max_y))
+                   xlims=xlims, ylims=ylims)
     ax2.set_title(f"Filtered Cells (n={len(cell_df_filt)})")
-    
-    #plt.suptitle(f"Cell Centroids Comparison - {orientation} View")
 
+    # ax square
+    ax1.set_aspect('auto', adjustable='box')
+    ax2.set_aspect('auto', adjustable='box')
+    
     plt.tight_layout()
     
     if save:
@@ -302,7 +321,7 @@ def fig_cell_centroids_comparison(cell_df, cell_df_filt, orientation="XY", save=
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"Saved plot to {output_path}")
     
-    plt.show()
+    return fig
 
 def qc_segmentation(dataset: HCRDataset, 
                     data_dir = Path("/root/capsule/data"), 
@@ -327,8 +346,9 @@ def qc_segmentation(dataset: HCRDataset,
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
 
-    qc_dir = output_dir / "segmentation_qc"
+    qc_dir = output_dir / "segmentation_qc"  
     qc_dir.mkdir(exist_ok=True, parents=True)
+    
     if verbose:
         print(f"Running segmentation QC for dataset: {dataset}")
         print(f"Data directory: {data_dir}")
@@ -342,5 +362,18 @@ def qc_segmentation(dataset: HCRDataset,
     q2 = 0.95
 
     _, _ = fig_centroids_filtered(cell_info, q1=q1, q2=q2, save=True, output_dir=qc_dir)
+
+
+    # --- 2. Plot cell centroids before and after filtering ---
+
+    orientations = ["XY", "ZX", "ZY"]
+    for orientation in orientations:
+        fig = fig_cell_centroids_comparison(cell_info, 
+                                            filter_cell_info(cell_info, q1=q1, q2=q2), 
+                                            orientation=orientation, 
+                                            save=True, 
+                                            output_dir=qc_dir)
+        if verbose:
+            print(f"Centroid comparison plot saved for orientation {orientation} to: {qc_dir}")
     if verbose:
         print(f"Segmentation QC plots saved to: {qc_dir}")
