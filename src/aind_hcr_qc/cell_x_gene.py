@@ -61,14 +61,13 @@ def plot_cell_x_gene_simple(cxg,
 
     return fig
 
-
 def plot_cell_x_gene_clustered(cxg, 
-                              clip_range=(0, 50), 
-                              sort_gene=None,
-                              fig_size=(4, 6),
-                              k=3,
-                              add_cluster_labels=True,
-                              cbar_label='Gene Expression Count'):
+                                clip_range=(0, 50), 
+                                sort_gene=None,
+                                fig_size=(4, 6),
+                                k=3,
+                                add_cluster_labels=True,
+                                cbar_label='Gene Expression Count'):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
 
@@ -95,6 +94,8 @@ def plot_cell_x_gene_clustered(cxg,
         The matplotlib figure object.
     cluster_labels : np.ndarray
         Array of cluster assignments for each cell.
+    sorted_cell_ids : pd.Index
+        Index of cell IDs in the same sorted order as cluster_labels.
     """
     if not isinstance(cxg, pd.DataFrame):
         raise ValueError("Input cxg must be a pandas DataFrame.")
@@ -112,6 +113,7 @@ def plot_cell_x_gene_clustered(cxg,
         # Sort by specified gene
         cxg = cxg.sort_values(by=sort_gene, ascending=False)
         cluster_labels = None
+        sorted_cell_ids = cxg.index  # Store the sorted cell IDs
     else:
         # Perform K-means clustering
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
@@ -124,6 +126,9 @@ def plot_cell_x_gene_clustered(cxg,
         
         # Update cluster labels to match the sorted order
         cluster_labels = cxg['cluster'].values
+        
+        # Store the sorted cell IDs before dropping helper columns
+        sorted_cell_ids = cxg.index
         
         # Remove helper columns
         cxg = cxg.drop(['cluster', 'total_expression'], axis=1)
@@ -159,10 +164,10 @@ def plot_cell_x_gene_clustered(cxg,
             
             # Add text label
             ax.text(-0.5, cluster_center, f'C{cluster_id}', 
-                   color='green', fontweight='bold', fontsize=14,
-                   verticalalignment='center', horizontalalignment='right')
+                    color='green', fontweight='bold', fontsize=14,
+                    verticalalignment='center', horizontalalignment='right')
 
-    return fig, cluster_labels
+    return fig, cluster_labels, sorted_cell_ids
 
 
 def cell_mean_centroid_df(dataset, mean_csv, round_key):
@@ -197,8 +202,13 @@ def plot_centroids_with_hist(df,
                             clip_range=(None, None),
                             xlims=(None, None),
                             ylims=(None, None),
+                            show_colorbar=True,
+                            title_str=None,
                             random_state=42,
-                            fig_size=(12, 8)):
+                            fig_size=(12, 8),
+                            save: bool=False,
+                            output_dir: str=None,
+                            filename_str: str=None):
     """
     Plot cell centroids with a vertical KDE histogram of the color column.
 
@@ -261,8 +271,9 @@ def plot_centroids_with_hist(df,
                                    alpha=0.6, c=df[color_col], 
                                    cmap=cmap, s=8)
         # Add colorbar
-        cbar = plt.colorbar(scatter, ax=ax_scatter)
-        cbar.set_label(color_col, rotation=270, labelpad=15)
+        if show_colorbar:
+            cbar = plt.colorbar(scatter, ax=ax_scatter)
+            cbar.set_label(color_col, rotation=270, labelpad=15)
     else:
         ax_scatter.scatter(df[x_coord], df[y_coord], alpha=0.6, s=8)
 
@@ -281,7 +292,7 @@ def plot_centroids_with_hist(df,
     ax_scatter.set_aspect('equal', adjustable='box')
     ax_scatter.set_xlabel(f'{x_coord}')
     ax_scatter.set_ylabel(f'{y_coord}')
-    ax_scatter.set_title(f'Cell Centroids - {plane}')
+    ax_scatter.set_title(f'{plane}')
     
     # Reverse y-axis for consistency
     if orientation in ['ZX', 'ZY', 'XY']:
@@ -322,7 +333,8 @@ def plot_centroids_with_hist(df,
             ax_hist.plot(smoothed_means, y_centers, color=hist_color, linewidth=2, alpha=0.8)
             
             ax_hist.set_ylabel(f'{y_coord}')
-            ax_hist.set_xlabel(f'Summed {color_col} intensity')
+            #ax_hist.set_xlabel(f'Summed {color_col} intensity')
+            ax_hist.set_xlabel(f'Count')
             #ax_hist.set_title(f'{color_col} intensity vs {y_coord}')
             
             # Set y-limits to match the scatter plot
@@ -334,6 +346,16 @@ def plot_centroids_with_hist(df,
             #     x_max = clip_range[1] if clip_range[1] is not None else valid_data[color_col].max()
             #     ax_hist.set_xlim(0, x_max)
             #     print(f"Histogram x-limits set to: {x_min} - {x_max}")
+
+            # ylabels off
+            ax_hist.set_yticks([])
+            # ylabel off
+            ax_hist.set_ylabel('')
+
+            if title_str is not None:
+                ax_hist.set_title(title_str)
+
+
         else:
             ax_hist.text(0.5, 0.5, 'No valid data\nfor histogram', 
                         ha='center', va='center', transform=ax_hist.transAxes)
@@ -351,4 +373,11 @@ def plot_centroids_with_hist(df,
     fig.suptitle(f'{sample_text}', fontsize=10, y=0.02)
 
     plt.tight_layout()
+
+    if save and output_dir is not None:
+        filename_str = "" if filename_str is None else "_" + filename_str
+        output_path = f"{output_dir}/centroids_{orientation}{filename_str}.png"
+        plt.savefig(output_path, bbox_inches='tight', dpi=300)
+        print(f"Figure saved to {output_path}")
+
     return fig
