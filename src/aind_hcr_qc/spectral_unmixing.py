@@ -58,11 +58,13 @@ def read_ratios_file(filename):
 
 def plot_spot_count(cxg_data, 
                     color_dict=None, 
-                    volume_filter=True, 
+                    volume_filter=False, 
                     volume_percentiles=(5, 95), 
-                    log_plot = True, 
+                    log_plot = False, 
                     figsize=(12, 4),
-                    min_n_spots=0):
+                    min_n_spots=0,
+                    save = False,
+                    output_dir=None):
     """
     Create a comprehensive QC figure for spot count distributions by gene.
     
@@ -195,6 +197,150 @@ def plot_spot_count(cxg_data,
     print("\nSummary Statistics by Gene:")
     print("=" * 60)
     print(stats.to_string())
+
+    if save and output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_dir / 'spot_count_qc_by_gene.png', bbox_inches='tight')
+        print(f"Figure saved to {output_dir / 'spot_count_qc_by_gene.png'}")
+    
+    return fig
+
+
+def plot_channel_dists(cxg_data, 
+                       color_dict=None, 
+                       log_plot = False,
+                       color_col='gene', # or channel
+                       value_col='spot_count', #or mean 
+                       figsize=(12, 4),
+                       save = False,
+                       output_dir=None):
+    """
+    Create a comprehensive QC figure for spot count distributions by gene.
+    
+    Parameters:
+    -----------
+    cxg_data : pandas.DataFrame
+        Cell-by-gene data with columns: cell_id, gene, spot_count, volume
+    color_dict : dict, optional
+        Dictionary mapping gene names to colors. If None, uses default palette.
+    log_plot : bool
+        Whether to use logarithmic scale for spot counts
+    figsize : tuple
+        Figure size (width, height)
+    Returns:
+    --------
+    matplotlib.figure.Figure
+        The created figure
+    """
+ 
+    # Make a copy to avoid modifying original data
+    data = cxg_data.copy()
+    
+    
+    # Get unique genes
+    genes = sorted(data[color_col].unique())
+    n_genes = len(genes)
+    
+    # Set up colors
+    if color_dict is None:
+        # Use a nice color palette
+        colors = sns.color_palette("husl", n_genes)
+        color_dict = dict(zip(genes, colors))
+    
+    # Calculate statistics for each gene
+    stats = data.groupby(color_col)[value_col].agg([
+        'count', 'min', 'max', 'median', 'mean', 'std'
+    ]).round(2)
+    
+    # Create figure with subplots
+    fig = plt.figure(figsize=figsize)
+    
+    # Calculate grid layout (try to make it roughly square)
+    cols = int(np.ceil(np.sqrt(n_genes)))
+    rows = int(np.ceil(n_genes / cols))
+    
+    value_str = value_col.replace('_', ' ').title()  # e.g. 'Spot Count' or 'Mean Intensity'
+    color_col_str = color_col.replace('_', ' ').title()  # e.g. 'Gene' or 'Channel'
+    # Create subplots for each gene
+    for i, gene in enumerate(genes):
+        ax = plt.subplot(rows, cols, i + 1)
+
+        plot_data = data[data[color_col] == gene][value_col]
+        color = color_dict.get(gene, 'steelblue')
+        
+        # Handle log plotting
+        #if log_plot and plot_data.min() > 0:
+        if log_plot:
+            # Use log-spaced bins for better visualization
+            bins = np.logspace(np.log10(max(plot_data.min(), 1)), 
+                             np.log10(plot_data.max()), 
+                             min(30, len(plot_data.unique())))
+            # Create histogram with log bins
+            sns.histplot(plot_data, bins=bins, kde=False, color=color, alpha=0.7, ax=ax)
+            ax.set_xscale('log')
+        else:
+            # Regular histogram
+            sns.histplot(plot_data, kde=True, color=color, alpha=0.7, ax=ax)
+
+        # Add vertical lines for statistics
+        median_val = plot_data.median()
+        mean_val = plot_data.mean()
+
+        ax.axvline(median_val, color='red', linestyle='--', alpha=0.8, linewidth=2, label=f'Median: {median_val:.1f}')
+        ax.axvline(mean_val, color='orange', linestyle=':', alpha=0.8, linewidth=2, label=f'Mean: {mean_val:.1f}')
+        
+        # Customize subplot
+        ax.set_title(f'{gene}\n(n={len(plot_data)}, range: {plot_data.min()}-{plot_data.max()})', 
+                    fontsize=10, fontweight='bold')
+        ax.set_title(f'{gene}\n(n={len(plot_data)}, range: {np.round(plot_data.min())}-{np.round(plot_data.max())})', 
+                fontsize=10, fontweight='bold')
+        ax.set_xlabel(f'{value_str}' + (' (log scale)' if log_plot and plot_data.min() > 0 else ''), fontsize=9)
+        ax.set_ylabel('Frequency', fontsize=9)
+        ax.tick_params(labelsize=8)
+
+        # y log
+        # if log_plot:
+        #     ax.set_yscale('log')
+        #     # ax.yaxis.set_major_formatter(ScalarFormatter())
+        #     # ax.yaxis.set_minor_formatter(ScalarFormatter())
+        #     ax.tick_params(axis='y', which='both', labelsize=8)
+
+        # Add legend for small subplots
+        if len(plot_data) > 0:
+            ax.legend(fontsize=7, loc='upper right')
+        
+        # Set reasonable x-axis limits
+        if not log_plot and plot_data.max() > 0:
+            ax.set_xlim(0, plot_data.quantile(0.99) * 1.1)
+
+        # xlim
+        ax.set_xlim(90, 1000)
+
+    # Remove empty subplots
+    for j in range(i + 1, rows * cols):
+        fig.delaxes(plt.subplot(rows, cols, j + 1))
+    
+    # Add overall title with summary info
+    total_cells = len(data['cell_id'].unique())
+    total_spots = data[value_col].sum()
+
+    fig.suptitle(f'{value_str} by {color_col_str}\n{total_cells:,} cells', 
+                fontsize=14, fontweight='bold', y=0.98)
+    
+    # Adjust layout
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    
+    # Print summary statistics table
+    print("\nSummary Statistics by Gene:")
+    print("=" * 60)
+    print(stats.to_string())
+
+    if save and output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_dir / 'spot_count_qc_by_gene.png', bbox_inches='tight')
+        print(f"Figure saved to {output_dir / 'spot_count_qc_by_gene.png'}")
     
     return fig
 
