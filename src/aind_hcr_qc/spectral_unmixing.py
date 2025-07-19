@@ -1175,14 +1175,14 @@ def plot_filtered_intensities(plot_df,
     if plot_cell_ids is None:
         plot_cell_ids = list(range(1, 20000))
         
-    if filters is None:
-        filters = {
-            'over_thresh': True,
-            'valid_spot': True,
-        }
+    if filters is not None:
+         filtered_df = utils.apply_filters_to_df(plot_df, filters)
+    else:
+        filters = {}
+        filtered_df = plot_df.copy()
     
     # Apply filters
-    filtered_df = utils.apply_filters_to_df(plot_df, filters)
+   
     
     # Create plot
     fig = plot_pairwise_intensities_multi_ratios(
