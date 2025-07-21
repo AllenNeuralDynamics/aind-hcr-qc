@@ -55,8 +55,8 @@ def load_mean_cxg(dataset, mean_csv_dict, value="mean"):
     gene_order = dfs["gene"].unique().tolist()
 
     mean_cxg = dfs.copy()
-    # put cell id as index and gene as columns, with mean as values
-    mean_cxg = mean_cxg.pivot_table(index="cell_id", columns="gene", values="mean").reset_index()
+    # put cell id as index and gene as columns, with the specified value as values
+    mean_cxg = mean_cxg.pivot_table(index="cell_id", columns="gene", values=value).reset_index()
     # sort cols by gene order
     mean_cxg = mean_cxg.reindex(columns=["cell_id"] + gene_order)
 
