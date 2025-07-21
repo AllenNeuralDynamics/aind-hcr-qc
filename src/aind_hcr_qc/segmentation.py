@@ -36,7 +36,7 @@ def plot_cell_volume_and_diameter(
     diameters : numpy.ndarray
         The calculated cell diameters in microns
     """
-    import matplotlib.pyplot as plt
+    # Removed redundant import of matplotlib.pyplot
 
     # Need to import seaborn for KDE plot
     # Create figure with two subplots
