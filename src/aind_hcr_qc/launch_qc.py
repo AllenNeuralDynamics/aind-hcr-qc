@@ -112,7 +112,7 @@ def qc_tile_alignment_wrapper(args):
         folder_names.append("PC")
     if ip_xml.exists():
         xmls.append(ip_xml)
-        folder_names.append("IP")
+        folder_names.append("PC_IP")
     if not xmls:
         raise FileNotFoundError("No tile alignment XML files found for the specified dataset.")
 
