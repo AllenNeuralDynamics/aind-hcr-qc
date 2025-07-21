@@ -106,15 +106,18 @@ def qc_tile_alignment_wrapper(args):
 
     # check if file exists make list
     xmls = []
+    folder_names = []
     if pc_xml.exists():
         xmls.append(pc_xml)
+        folder_names.append("PC")
     if ip_xml.exists():
         xmls.append(ip_xml)
+        folder_names.append("PC_IP")
     if not xmls:
         raise FileNotFoundError("No tile alignment XML files found for the specified dataset.")
 
     # Parse BigStitcher XML
-    for xml_path in xmls:
+    for xml_path, folder_name in zip(xmls, folder_names):
         print(f"Parsing BigStitcher XML: {xml_path}")
         stitched_xml = ta.parse_bigstitcher_xml(xml_path)
 
@@ -122,11 +125,13 @@ def qc_tile_alignment_wrapper(args):
         pairs = ta.get_all_adjacent_pairs(stitched_xml["tile_names"], include_diagonals=False)
         print(f"Found {len(pairs)} adjacent tile pairs")
 
+        output_dir = Path(args.output_dir) / "tile_alignment_qc" / folder_name
+        output_dir.mkdir(parents=True, exist_ok=True)
         # Run QC analysis
         ta.qc_tile_alignment(
             stitched_xml=stitched_xml,
             pairs=pairs,
-            save_dir=args.output_dir,
+            save_dir=output_dir,
             bucket_name=args.bucket_name,
             pyramid_level=args.pyramid_level,
         )

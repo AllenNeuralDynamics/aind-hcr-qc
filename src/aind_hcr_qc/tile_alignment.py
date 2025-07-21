@@ -4206,9 +4206,12 @@ def qc_tile_alignment(stitched_xml, pairs, save_dir, bucket_name="aind-open-data
     """
     from pathlib import Path
 
-    # Ensure save directory exists
-    save_dir = Path(save_dir / "tile_alignment_qc")
-    save_dir.mkdir(parents=True, exist_ok=True)
+    # may already be in tile_alignment_qc directory
+    if not isinstance(save_dir, Path):
+        save_dir = Path(save_dir)
+    if "tile_alignment_qc" not in save_dir.parts:
+        save_dir = Path(save_dir / "tile_alignment_qc")
+        save_dir.mkdir(parents=True, exist_ok=True)
 
     channels = ["405", "spots-avg"]
 
