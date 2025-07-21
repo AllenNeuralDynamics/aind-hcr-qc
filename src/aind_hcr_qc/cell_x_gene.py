@@ -4,6 +4,75 @@ import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 from sklearn.cluster import KMeans
 
+# -------------------------------------------------------------------------------------------------
+# Data handling functions
+# -------------------------------------------------------------------------------------------------
+
+
+def load_mean_cxg(dataset, mean_csv_dict, value="mean"):
+    """
+    Load mean cell x gene data from the dataset.
+
+    Parameters
+    ----------
+    dataset : HCRDataset
+        The HCR dataset containing round information
+    mean_csv_dict : dict, optional
+        Dictionary mapping round keys to CSV file paths containing mean expression data.
+        If None, uses default file paths.
+        Example:
+        {
+            "R1": "/path/to/mean_data_R1.csv",
+            "R2": "/path/to/mean_data_R2.csv"
+        }
+    value : str, optional
+        Value for cell x gene matrix, may be "mean", "mean_bg_corr", or "sum", or other metric
+
+    Returns
+    -------
+    pandas.DataFrame
+        Cell x gene matrix with mean intensity values, with cell_id as index and genes as columns
+    """
+    if not mean_csv_dict:
+        raise ValueError("mean_csv_dict must be provided with round keys and CSV file paths.")
+
+    dfs = []
+    for round_key in mean_csv_dict.keys():
+        pm = dataset.rounds[round_key].processing_manifest
+        mean_df = pd.read_csv(mean_csv_dict[round_key])
+
+        # subtract background
+        mean_df["mean_bg_corr"] = mean_df["mean"] - mean_df["background"]
+
+        mean_df["gene"] = (
+            mean_df["channel"].astype(str).map(pm["gene_dict"]).apply(lambda x: x["gene"] if isinstance(x, dict) else x)
+        )
+        mean_df["round"] = round_key
+        dfs.append(mean_df)
+
+    # has: channel	cell_id	sum	count	mean	gene	round
+    dfs = pd.concat(dfs, axis=0)
+    gene_order = dfs["gene"].unique().tolist()
+
+    mean_cxg = dfs.copy()
+    # put cell id as index and gene as columns, with mean as values
+    mean_cxg = mean_cxg.pivot_table(index="cell_id", columns="gene", values="mean").reset_index()
+    # sort cols by gene order
+    mean_cxg = mean_cxg.reindex(columns=["cell_id"] + gene_order)
+
+    mean_cxg = mean_cxg.set_index("cell_id")
+    mean_cxg.dropna(inplace=True)
+
+    print(f"Loaded mean cell x gene matrix with shape: {mean_cxg.shape}")
+    print(f"Genes: {mean_cxg.columns.tolist()}")
+
+    return mean_cxg
+
+
+# -------------------------------------------------------------------------------------------------
+# Cell x gene plotting functions
+# -------------------------------------------------------------------------------------------------
+
 
 def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6)):
     """
@@ -180,6 +249,11 @@ def plot_cell_x_gene_clustered(
     return fig, cluster_labels, sorted_cell_ids
 
 
+# -------------------------------------------------------------------------------------------------
+# Cell mean centroid functions
+# Note: These functions are used to visualize cell centroids with histograms of mean fluorescence,
+#       Not cell x gene per se, but need gene call information to plot meaningful clusters.
+# -------------------------------------------------------------------------------------------------
 def cell_mean_centroid_df(dataset, mean_csv, round_key):
     """
     Load cell mean flouresence data from a CSV file and merges with cell information.

@@ -3,6 +3,50 @@
 import operator
 import re
 
+from aind_hcr_qc.constants import CHANNEL_COLORS
+
+# -------------------------------------------------------------------------------------------------
+# Project specific utils
+# -------------------------------------------------------------------------------------------------
+
+
+def get_gene_channel_colors(dataset):
+    """
+    Get a dictionary mapping genes to their channel colors.
+
+    Example:
+    {'Rn28s': '#9E9E9E',
+    'GFP': '#4CAF50',
+    'Gad2': '#2196F3'}
+
+    Parameters
+    ----------
+    dataset : HCRDataset
+        The HCR dataset containing round information.
+
+    Returns
+    -------
+    dict
+        A dictionary mapping genes to their channel colors.
+        488 channel is green, so show what gene is in that channel as green.
+        Example: {'Gad2': '#4CAF50', 'SST': 'purple', ...}
+    """
+
+    if not dataset.rounds:
+        raise ValueError("Dataset has no rounds. Cannot get gene channel colors.")
+
+    gene_channel_colors = {}
+    for round_n in dataset.rounds:
+        pm = dataset.rounds[round_n].processing_manifest
+        for channel, gene in pm["gene_dict"].items():
+            gene_channel_colors[gene["gene"]] = CHANNEL_COLORS[channel]
+
+    return gene_channel_colors
+
+
+def _get_channel_colors():
+    return CHANNEL_COLORS
+
 
 def apply_filters_to_df(df, filters):
     """
