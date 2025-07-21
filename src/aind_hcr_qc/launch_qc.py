@@ -125,7 +125,7 @@ def qc_tile_alignment_wrapper(args):
         pairs = ta.get_all_adjacent_pairs(stitched_xml["tile_names"], include_diagonals=False)
         print(f"Found {len(pairs)} adjacent tile pairs")
 
-        output_dir = Path(args.output_dir) / "tile_alignment_qc" / folder_name 
+        output_dir = Path(args.output_dir) / "tile_alignment_qc" / folder_name
         output_dir.mkdir(parents=True, exist_ok=True)
         # Run QC analysis
         ta.qc_tile_alignment(
