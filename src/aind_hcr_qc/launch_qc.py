@@ -20,7 +20,7 @@ import aind_hcr_qc.camera_alignment as ca
 import aind_hcr_qc.round_to_round as r2r
 import aind_hcr_qc.segmentation as seg
 import aind_hcr_qc.spectral_unmixing as su
-import aind_hcr_qc.spots as spots
+import aind_hcr_qc.spot_detection as sd
 
 # Import QC modules
 import aind_hcr_qc.tile_alignment as ta
@@ -228,7 +228,7 @@ def qc_spot_detection_wrapper(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Run spot detection QC
-    spots.qc_spot_detection(data_dir=args.data_dir, output_dir=output_dir, channels=args.channels, verbose=args.verbose)
+    sd.qc_spot_detection(data_dir=args.data_dir, output_dir=output_dir, channels=args.channels, verbose=args.verbose)
 
     print("Spot detection QC completed successfully!")
 
