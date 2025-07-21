@@ -5,6 +5,15 @@ exclude =
     build,
     .venv,
     venv
-max-complexity = 10
+max-complexity = 40
 max-line-length = 120
-ignore = C901, E203, E226
+ignore =
+    # complexity handled above
+    C901,
+    # incompatible with black 
+    E203,
+    # incompatible with black 
+    W503,
+    # line too long, black will handle this 
+    E501, 
+    E226,
