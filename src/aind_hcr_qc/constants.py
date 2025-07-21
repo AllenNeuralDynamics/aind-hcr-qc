@@ -5,7 +5,7 @@ CHANNEL_COLORS = {
     "514": "#F44336",  # Vibrant red
     "561": "#2196F3",  # Sky blue
     "594": "#00BCD4",  # Teal
-    "638": "#9C27B0"   # Rich purple
+    "638": "#9C27B0",  # Rich purple
 }
 
 VOXEL_SIZE = [0.245055, 0.245055, 1.0]  # [X, Y, Z]

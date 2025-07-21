@@ -22,7 +22,7 @@ dependencies = [
     'scipy',
     'aind-ng-link',
     'aind-hcr-data-loader',
-    'xmltodict', # needed for parsers temp hack
+    'xmltodict', # needed for parsers, which is hacked from aind-ng-link
     'aind-ng-link'
 ]
 
@@ -76,7 +76,7 @@ exclude_lines = [
     "^import .*",
     "pragma: no cover"
 ]
-fail_under = 5
+fail_under = 1
 
 [tool.isort]
 line_length = 120

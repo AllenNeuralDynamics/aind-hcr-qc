@@ -41,6 +41,7 @@ def main():
     checks = [
         ("black .", "Running black to format code"),
         ("isort .", "Running isort to sort imports"),
+        ("autoflake8 . --in-place -r -v", "Running autoflake8 to remove unused imports and variables"),
         ("flake8 .", "Running flake8 for linting"),
         ("interrogate .", "Running interrogate for documentation coverage"),
         ("coverage run -m unittest discover && coverage report", "Running tests with coverage"),

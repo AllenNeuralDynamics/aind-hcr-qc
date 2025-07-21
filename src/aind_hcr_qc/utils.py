@@ -1,10 +1,7 @@
 """General utils"""
-import os
-import re
+
 import operator
-import pandas as pd
-from typing import Dict, Any
-from pathlib import Path
+import re
 
 
 def apply_filters_to_df(df, filters):
@@ -18,12 +15,12 @@ def apply_filters_to_df(df, filters):
     """
 
     ops = {
-        '>': operator.gt,
-        '<': operator.lt,
-        '>=': operator.ge,
-        '<=': operator.le,
-        '==': operator.eq,
-        '!=': operator.ne
+        ">": operator.gt,
+        "<": operator.lt,
+        ">=": operator.ge,
+        "<=": operator.le,
+        "==": operator.eq,
+        "!=": operator.ne,
     }
 
     df_filtered = df
@@ -34,7 +31,7 @@ def apply_filters_to_df(df, filters):
             df_filtered = df_filtered[df_filtered[col] == val]
         elif isinstance(val, str):
             # Check for operator pattern
-            m = re.match(r'(>=|<=|==|!=|>|<)\s*(.+)', val)
+            m = re.match(r"(>=|<=|==|!=|>|<)\s*(.+)", val)
             if m:
                 op_str, num_str = m.groups()
                 op_func = ops[op_str]
@@ -58,18 +55,13 @@ def filter_dict_to_string(filters):
     """
     if not filters:
         return "unfiltered"
-    
-    abbreviations = {
-        'over_thresh': 'ot',
-        'valid_spot': 'vs'
-    }
-    
+
+    abbreviations = {"over_thresh": "ot", "valid_spot": "vs"}
+
     parts = []
     for key, value in filters.items():
         abbr = abbreviations.get(key, key[:2])
-        val_str = 'T' if value else 'F' if isinstance(value, bool) else str(value)
+        val_str = "T" if value else "F" if isinstance(value, bool) else str(value)
         parts.append(f"{abbr}-{val_str}")
-    
-    return '_'.join(parts)
 
-
+    return "_".join(parts)

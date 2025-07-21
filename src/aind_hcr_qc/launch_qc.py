@@ -14,6 +14,17 @@ import argparse
 import sys
 from pathlib import Path
 
+from aind_hcr_data_loader.hcr_dataset import create_hcr_dataset
+
+import aind_hcr_qc.camera_alignment as ca
+import aind_hcr_qc.round_to_round as r2r
+import aind_hcr_qc.segmentation as seg
+import aind_hcr_qc.spectral_unmixing as su
+import aind_hcr_qc.spots as spots
+
+# Import QC modules
+import aind_hcr_qc.tile_alignment as ta
+
 
 def str2bool(v):
     """Convert string representation to boolean value.
@@ -32,23 +43,12 @@ def str2bool(v):
     """
     if isinstance(v, bool):
         return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+    if v.lower() in ("yes", "true", "t", "y", "1"):
         return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+    elif v.lower() in ("no", "false", "f", "n", "0"):
         return False
     else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
-
-from aind_hcr_data_loader.hcr_dataset import create_hcr_dataset
-
-import aind_hcr_qc.camera_alignment as ca
-import aind_hcr_qc.round_to_round as r2r
-import aind_hcr_qc.segmentation as seg
-import aind_hcr_qc.spectral_unmixing as su
-import aind_hcr_qc.spots as spots
-
-# Import QC modules
-import aind_hcr_qc.tile_alignment as ta
+        raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
 def setup_argument_parser():
@@ -78,14 +78,10 @@ def setup_argument_parser():
     # QC type flags (all default to False)
     qc_group = parser.add_argument_group("QC Types")
     qc_group.add_argument("--tile-alignment", type=str2bool, default=False, help="Run tile alignment QC analysis")
-    qc_group.add_argument(
-        "--camera-alignment", type=str2bool, default=False, help="Run camera alignment QC analysis"
-    )
+    qc_group.add_argument("--camera-alignment", type=str2bool, default=False, help="Run camera alignment QC analysis")
     qc_group.add_argument("--segmentation", type=str2bool, default=False, help="Run segmentation QC analysis")
     qc_group.add_argument("--round-to-round", type=str2bool, default=False, help="Run round-to-round QC analysis")
-    qc_group.add_argument(
-        "--spectral-unmixing", type=str2bool, default=False, help="Run spectral unmixing QC analysis"
-    )
+    qc_group.add_argument("--spectral-unmixing", type=str2bool, default=False, help="Run spectral unmixing QC analysis")
     qc_group.add_argument("--spot-detection", type=str2bool, default=False, help="Run spot detection QC analysis")
     qc_group.add_argument("--all", type=str2bool, default=False, help="Run all QC analyses")
 

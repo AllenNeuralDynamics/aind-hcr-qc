@@ -1,10 +1,6 @@
 """Spots"""
 
 
-
-
-
-
 def qc_spot_detection(data_dir, output_dir, channels=None, verbose=False):
     """
     Run spot detection quality control analysis.
