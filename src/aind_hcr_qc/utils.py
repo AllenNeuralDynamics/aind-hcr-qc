@@ -44,8 +44,7 @@ def get_gene_channel_colors(dataset):
     return gene_channel_colors
 
 
-def _get_channel_colors():
-    return CHANNEL_COLORS
+# Removed `_get_channel_colors()` function as it is redundant.
 
 
 def apply_filters_to_df(df, filters):
