@@ -327,7 +327,7 @@ def fig_cell_centroids_comparison(cell_df, cell_df_filt, orientation="XY", save=
 
 
 def qc_segmentation(
-    dataset: HCRDataset, data_dir=Path("/root/capsule/data"), output_dir=Path("/root/capsule/stratch"), verbose=True
+    dataset: HCRDataset, data_dir=Path("/root/capsule/data"), output_dir=Path("/root/capsule/scratch"), verbose=True
 ):
     """
     Run segmentation quality control analysis.
