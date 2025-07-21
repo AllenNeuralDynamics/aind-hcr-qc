@@ -311,7 +311,8 @@ def plot_channel_dists(
         if not log_plot and plot_data.max() > 0:
             ax.set_xlim(0, plot_data.quantile(0.99) * 1.1)
 
-        # xlim
+        # Set hardcoded x-axis limits to focus on the range of interest for visualization.
+        # These limits are chosen based on expected data distribution and to exclude outliers.
         ax.set_xlim(90, 1000)
 
     # Remove empty subplots
