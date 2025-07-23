@@ -1,5 +1,7 @@
 from collections import defaultdict
 from pathlib import Path
+import logging
+import warnings
 
 import dask.array as da
 import matplotlib.pyplot as plt
@@ -13,7 +15,7 @@ from scipy import ndimage
 
 # from ng_link import parsers
 import aind_hcr_qc.parsers as parsers
-
+logger = logging.getLogger(__name__)
 
 def load_tile_data(
     tile_name: str, bucket_name: str, dataset_path: str, pyramid_level: int = 0, dims_order: tuple = (1, 2, 0)
@@ -576,7 +578,7 @@ def make_composite(
     T2_fullres: np.ndarray,
     level1: int = 0,
     level2: int = 0,
-    affine_tol: float = 1e‑2,
+    affine_tol: float = 0.0004,
     order: int = 1,
     cval: float = 0.0,
     clip_percentiles: tuple[int, int] = (1, 99),
@@ -614,6 +616,13 @@ def make_composite(
     composite : dask.array.Array
         Lazily‑evaluated array with shape (Zc, Yc, Xc, 2).
     """
+
+    logger.info("=" * 60)
+    logger.info("Starting make_composite")
+    logger.info(f"Input shapes: tile1={tile1.shape}, tile2={tile2.shape}")
+    logger.info(f"Pyramid levels: level1={level1}, level2={level2}")
+    logger.info(f"Affine tolerance: {affine_tol}")
+    logger.info(f"Interpolation order: {order}")
 
     # ------------------------------------------------------------------
     # 1.  Prepare helper functions
@@ -749,7 +758,7 @@ class PairedTiles:
         transform2: np.ndarray,
         names: tuple[str, str] | None = None,
         clip_percentiles: tuple[int, int] = (1, 99),
-        affine_tol: float = 1e‑4,
+        affine_tol: float = 0.0004,
         order: int = 1,
     ):
         """
@@ -771,11 +780,12 @@ class PairedTiles:
         self.name1, self.name2 = (
             names if names is not None else (tile1.tile_name, tile2.tile_name)
         )
+        self.percentile_values = clip_percentiles
 
         # --- build composite lazily -------------------------------------
         self.composite: da.Array = make_composite(
-            tile1.data,
-            tile2.data,
+            tile1._data, # assuming tile1._data is a dask array
+            tile2._data, # assuming tile2._data is a dask array
             transform1,
             transform2,
             level1=tile1.pyramid_level,
@@ -878,6 +888,12 @@ class PairedTiles:
             cmax = min(slice_np.shape[1] - 1, cmax + padding)
 
             slice_np = slice_np[rmin : rmax + 1, cmin : cmax + 1, :]
+
+        # make sure the slice has 3 channels for RGB
+        if slice_np.ndim == 3 and slice_np.shape[-1] == 2:
+            h, w, _ = slice_np.shape
+            blue = np.zeros((h, w, 1), dtype=slice_np.dtype)
+            slice_np = np.concatenate([slice_np, blue], axis=-1)
 
         return slice_np
 
@@ -1025,15 +1041,15 @@ def visualize_multichannel_paired_tiles(
         try:
             # Create paired tiles for this channel
             paired_tiles = PairedTiles(
-                tile1=TileData(ch_tile1, "aind-open-data", data["dataset_path"], pyramid_level).connect(),
-                tile2=TileData(ch_tile2, "aind-open-data", data["dataset_path"], pyramid_level).connect(),
+                tile1=TileData(ch_tile1, "aind-open-data", data["dataset_path"], pyramid_level),
+                tile2=TileData(ch_tile2, "aind-open-data", data["dataset_path"], pyramid_level),
                 transform1=transform1,
                 transform2=transform2,
                 names=(f"{ch_tile1} ({channel})", f"{ch_tile2} ({channel})"),
             )
 
             # Load the data
-            paired_tiles.load_data()
+            #paired_tiles.load_data()
 
             # Get middle slices
             z_slice = paired_tiles.composite_shape[2] // 2
@@ -1094,8 +1110,8 @@ def visualize_paired_tiles(
     if padding == "auto":
         padding = 16 * 2 ** (3 - pyramid_level)
     # Create TileData objects
-    tile1 = TileData(tile1_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level).connect()
-    tile2 = TileData(tile2_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level).connect()
+    tile1 = TileData(tile1_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
+    tile2 = TileData(tile2_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
 
     # Get tile IDs
     tile1_id = list(data["tile_names"].keys())[list(data["tile_names"].values()).index(tile1_name)]
@@ -1303,102 +1319,6 @@ def fig_tile_overlap_4_slices(
         plt.close()
     else:
         plt.show()
-
-
-# def fig_tile_overlap_4_slices(tile1_name,
-#                                  tile2_name,
-#                                  data,
-#                                  channel='405', # or "spots"
-#                                  pyramid_level=1,
-#                                  bucket_name='aind-open-data',
-#                                  save=False,
-#                                  output_dir=None,
-#                                  verbose=False):
-
-#     # Create TileData objects
-#     if channel == 'spots-avg':
-#         spots_channels = ["488", "514", "561", "594", "638"]
-#         # get tile data for each channel and average them
-#         for ch in spots_channels:
-#             tile1_name_ch = tile1_name.replace('_ch_405.zarr', f'_ch_{ch}.zarr')
-#             tile2_name_ch = tile2_name.replace('_ch_405.zarr', f'_ch_{ch}.zarr')
-
-#             try:
-#                 if ch == spots_channels[0]:
-#                     tile1 = TileData(tile1_name_ch, bucket_name,
-#                               data["dataset_path"], pyramid_level=pyramid_level)
-#                     tile2 = TileData(tile2_name_ch, bucket_name,
-#                                  data["dataset_path"], pyramid_level=pyramid_level)
-#                     previous_tile_data = None
-#                 else:
-#                     tile1 = tile1.average(TileData(tile1_name_ch,
-#                       bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
-#                     tile2 = tile2.average(TileData(tile2_name_ch,
-#                       bucket_name, data["dataset_path"], pyramid_level=pyramid_level))
-#             except Exception as e:
-#                 print(f"Error loading tile {tile1_name_ch} or {tile2_name_ch}: {e}")
-#                 continue
-
-#             # check if tile data changed values, max should be diff
-#             print(np.max(previous_tile_data), np.max(tile1.data))
-#             previous_tile_data = tile1.data.copy()
-#             if np.max(previous_tile_data) != np.max(tile1.data):
-#                 print(f"Tile data changed for {tile1_name_ch} or
-#                        {tile2_name_ch}, max value: {np.max(tile1.data)}")
-#             previous_tile_data = tile1.data.copy()
-
-#     elif channel == '405':
-#         tile1 = TileData(tile1_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
-#         tile2 = TileData(tile2_name, bucket_name, data["dataset_path"], pyramid_level=pyramid_level)
-
-#     padding_dict = {0: 75, 1: 50, 2: 30, 3: 10}
-#     padding = padding_dict.get(pyramid_level, 50)  # Default to 50 if not found
-
-#     # look up the values in data["tile_names"] to get the ids (which is the key)
-#     tile1_id = list(data["tile_names"].keys())[list(data["tile_names"].values()).index(tile1_name)]
-#     tile2_id = list(data["tile_names"].keys())[list(data["tile_names"].values()).index(tile2_name)]
-
-#     # Get transforms for the tiles
-#     transform1 = data["net_transforms"][tile1_id]
-#     transform2 = data["net_transforms"][tile2_id]
-
-#     n_cols = 4
-#     size = 6
-#     fig, axes = plt.subplots(1, n_cols, figsize=(size,size*1.25), sharey=True, constrained_layout=True)
-#     axes = axes.flatten()
-
-#     # Calculate z-slices at 20%, 40%, 60%, and 80% through the z dimension
-#     z_min = max(0, min(tile1.shape[0], tile2.shape[0]))
-#     z_slices = [int(z_min * p) for p in [0.2, 0.4, 0.6, 0.8]]
-
-#     for i, z_slice in enumerate(z_slices):
-#         result = visualize_tile_overlap(tile1, tile2, transform1, transform2,
-#                                         z_slice=z_slice, padding=padding, verbose=verbose)
-#         composite = result['composite']
-#         overlap_shape = composite.shape
-#         # transpose if a vertically adjacent tile
-#         if overlap_shape[1] > overlap_shape[0]:
-#             composite = composite.transpose(1, 0, 2)
-
-#         axes[i].imshow(composite, aspect='auto')
-#         axes[i].set_title(f'Z={z_slice}')
-#         axes[i].axis('on')
-#     tile1_name, ch1 = parse_tile_name(tile1.tile_name)
-#     tile2_name, ch2 = parse_tile_name(tile2.tile_name)
-
-#     plt.suptitle(f'Tile Overlap - Red={tile1_name}, Green={tile2_name} Ch={channel} Pyr={pyramid_level}', fontsize=16)
-#     plt.subplots_adjust(top=0.15)
-#     if save and output_dir:
-#         from pathlib import Path
-#         output_path = Path(output_dir)
-#         output_path.mkdir(parents=True, exist_ok=True)
-#         filename = f'tile_overlap_4slices_{tile1_name}_{tile2_name}_{channel}_pyr{pyramid_level}.png'
-#         filepath = output_path / filename
-#         plt.savefig(filepath, dpi=150, bbox_inches='tight')
-#         print(f"Figure saved to: {filepath}")
-#         plt.close()
-#     else:
-#         plt.show()
 
 
 # ------------------------------------------------------------------------------------------------
@@ -1955,814 +1875,6 @@ def plot_transform_differences_histogram(stats, bins=50):
     plt.tight_layout()
     plt.show()
 
-
-def get_transformed_tile_pair(
-    tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, z_slice=None, pyramid_level=0
-):
-    """
-    Get a z-slice through two adjacent tiles in their transformed positions.
-    Transforms are relative to (0,0) at the center of the nominal grid.
-    Z-transform is applied before selecting the slice.
-
-    Args:
-        tile1_name, tile2_name: Names of tiles to compare
-        transforms: Dictionary mapping tile IDs to transformation matrices
-        tile_names: Dictionary mapping tile IDs to tile names
-        bucket_name: S3 bucket name
-        dataset_path: Path to dataset in bucket
-        z_slice: Z-slice to display
-        pyramid_level: Pyramid level to load
-
-    Returns:
-        combined: Combined image array
-        extent: [x_min, x_max, y_min, y_max] for plotting
-        z_slice: The z-slice that was used
-    """
-    # Get indices and transforms
-    idx1 = list(tile_names.keys())[list(tile_names.values()).index(tile1_name)]
-    idx2 = list(tile_names.keys())[list(tile_names.values()).index(tile2_name)]
-    t1 = transforms[idx1]
-    t2 = transforms[idx2]
-
-    # Load tile data
-    tile1_data = load_tile_data(tile1_name, bucket_name, dataset_path, pyramid_level)
-    tile2_data = load_tile_data(tile2_name, bucket_name, dataset_path, pyramid_level)
-
-    # Apply Z transform to the data
-    scale = int(2**pyramid_level)
-    z_offset1 = int(round(t1[2, 3] / scale))  # Get Z offset from transform
-    z_offset2 = int(round(t2[2, 3] / scale))  # Get Z offset from transform
-
-    # Pad or crop the data based on z offsets
-    max_z = max(tile1_data.shape[2] + abs(z_offset1), tile2_data.shape[2] + abs(z_offset2))
-    min_z = min(0, z_offset1, z_offset2)
-
-    # Create padded arrays (initialized to black)
-    tile1_padded = np.zeros((tile1_data.shape[0], tile1_data.shape[1], max_z - min_z), dtype=tile1_data.dtype)
-    tile2_padded = np.zeros((tile2_data.shape[0], tile2_data.shape[1], max_z - min_z), dtype=tile2_data.dtype)
-
-    # Fill padded arrays (rest remains black)
-    z1_start = abs(min_z) + z_offset1
-    z2_start = abs(min_z) + z_offset2
-    tile1_padded[:, :, z1_start : z1_start + tile1_data.shape[2]] = tile1_data
-    tile2_padded[:, :, z2_start : z2_start + tile2_data.shape[2]] = tile2_data
-
-    if z_slice is None:
-        z_slice = (max_z - min_z) // 2
-    elif z_slice == "max":
-        # determine which z slice had the most signal together
-        z_slice = np.argmax(np.sum(tile1_padded, axis=(0, 1)) + np.sum(tile2_padded, axis=(0, 1)))
-    elif z_slice == "center":
-        z_slice = (max_z - min_z) // 2
-
-    # # Create RGB arrays for visualization
-    # def create_rgb_slice(data, z_idx, color):
-    #     """Create RGB array with data in specified color channel"""
-    #     rgb = np.zeros((*data.shape[:2], 3))
-    #     if color == 'red':
-    #         rgb[..., 0] = data[:, :, z_idx] / np.percentile(data[:, :, z_idx], 99.99)
-    #     elif color == 'green':
-    #         rgb[..., 1] = data[:, :, z_idx] / np.percentile(data[:, :, z_idx], 99.99)
-    #     return np.clip(rgb, 0, 1)
-
-    # Create RGB arrays for visualization
-    def create_rgb_slice(data, z_idx, color, clip_range=None):
-        """Create RGB array with data in specified color channel"""
-        rgb = np.zeros((*data.shape[:2], 3))
-
-        # clip to percentile 1 and 99 of whole stack
-        if clip_range is not None:
-            min_val, max_val = clip_range
-        else:
-            min_val = np.percentile(data, 1)
-            max_val = np.percentile(data, 99.9)
-        data = np.clip(data, min_val, max_val)
-        print(min_val, max_val)
-        if color == "red":
-            slice_data = data[:, :, z_idx]
-            rgb[..., 0] = slice_data / max_val
-        elif color == "green":
-            slice_data = data[:, :, z_idx]
-            rgb[..., 1] = slice_data / max_val
-        return np.clip(rgb, 0, 1)
-
-    # Create RGB arrays using padded data
-    rgb1 = create_rgb_slice(tile1_padded, z_slice, "red")
-    rgb2 = create_rgb_slice(tile2_padded, z_slice, "green")
-
-    # Calculate transformed coordinates
-    def get_transformed_coords(data_shape, transform):
-        """Get transformed corner coordinates relative to center (0,0)"""
-        h, w = data_shape[:2]
-        # Define corners relative to center of tile
-        corners = np.array(
-            [
-                [-w / 2, -h / 2, 0, 1],  # top-left
-                [w / 2, -h / 2, 0, 1],  # top-right
-                [-w / 2, h / 2, 0, 1],  # bottom-left
-                [w / 2, h / 2, 0, 1],  # bottom-right
-            ]
-        )
-        transformed = np.dot(transform, corners.T).T
-        return transformed[:, [0, 1]]  # Return x,y coordinates
-
-    # Scale transforms by pyramid level
-    scale = 2**pyramid_level
-    t1_scaled = t1.copy()
-    t2_scaled = t2.copy()
-    t1_scaled[:3, 3] /= scale
-    t2_scaled[:3, 3] /= scale
-
-    coords1 = get_transformed_coords(tile1_data.shape, t1_scaled)
-    coords2 = get_transformed_coords(tile2_data.shape, t2_scaled)
-
-    # Create a combined image that covers both tiles
-    x_coords = np.concatenate([coords1[:, 0], coords2[:, 0]])
-    y_coords = np.concatenate([coords1[:, 1], coords2[:, 1]])
-    x_min, x_max = x_coords.min(), x_coords.max()
-    y_min, y_max = y_coords.min(), y_coords.max()
-
-    # Calculate pixel dimensions needed for the combined image
-    pixel_size = 1.0  # base pixel size
-    width = int((x_max - x_min) / pixel_size)
-    height = int((y_max - y_min) / pixel_size)
-
-    # Create empty combined image
-    combined = np.zeros((height, width, 3))
-
-    # Map tile coordinates to combined image coordinates
-    def map_to_combined(rgb, coords):
-        src_h, src_w = rgb.shape[:2]
-        x_start = int((coords[:, 0].min() - x_min) / pixel_size)
-        y_start = int((coords[:, 1].min() - y_min) / pixel_size)
-        x_end = x_start + src_w
-        y_end = y_start + src_h
-        return (slice(y_start, y_end), slice(x_start, x_end))
-
-    # Add both tiles to the combined image
-    slice1 = map_to_combined(rgb1, coords1)
-    slice2 = map_to_combined(rgb2, coords2)
-    combined[slice1] += rgb1
-    combined[slice2] += rgb2
-
-    # Clip to ensure we don't exceed 1.0
-    combined = np.clip(combined, 0, 1)
-
-    # Return the combined image and extent for plotting
-    extent = [x_min, x_max, y_min, y_max]
-
-    return combined, extent, z_slice
-
-
-# def plot_adjacent_tile_pair(
-#     tile1_name,
-#     tile2_name,
-#     transforms,
-#     tile_names,
-#     bucket_name,
-#     dataset_path,
-#     slice_index=None,
-#     pyramid_level=0,
-#     save=False,
-#     output_dir=None,
-# ):
-#     """
-#     Plot a z-slice through two adjacent tiles in their transformed positions.
-#     Transforms are relative to (0,0) at the center of the nominal grid.
-#     Z-transform is applied before selecting the slice.
-
-#     Args:
-#         tile1_name, tile2_name: Names of tiles to compare
-#         transforms: Dictionary mapping tile IDs to transformation matrices
-#         tile_names: Dictionary mapping tile IDs to tile names
-#         bucket_name: S3 bucket name
-#         dataset_path: Path to dataset in bucket
-#         slice_index: slice index in the zarr file
-#         pyramid_level: Pyramid level to load
-#         save: Whether to save the plot
-#         output_dir: Directory to save plot if save=True
-#     """
-#     # Get the transformed and combined tile data
-#     combined, extent, slice = get_transformed_tile_pair(
-#         tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, slice_index, pyramid_level
-#     )
-
-#     # Create figure
-#     fig, ax = plt.subplots(figsize=(12, 8))
-#     ax.set_facecolor("black")
-
-#     # Plot combined image
-#     ax.imshow(combined, extent=extent)
-
-#     # Add tile information
-#     pos1 = parse_tile_name(tile1_name)
-#     pos2 = parse_tile_name(tile2_name)
-#     ax.set_title(f"Tile Pair Comparison\nRed: {pos1} | Green: {pos2} | Yellow: Overlap\nZ-slice: {slice_index}")
-
-#     # Set axis limits with padding
-#     padding = 0.05  # 5% padding
-#     x_range = extent[1] - extent[0]
-#     y_range = extent[3] - extent[2]
-#     ax.set_xlim(extent[0] - x_range * padding, extent[1] + x_range * padding)
-#     ax.set_ylim(extent[2] - y_range * padding, extent[3] + y_range * padding)
-
-#     if save and output_dir:
-#         output_path = Path(output_dir) / f"tile_pair_{tile1_name}_{tile2_name}_z{slice_index}.png"
-#         plt.savefig(output_path)
-#         plt.close()
-#     else:
-#         plt.show()
-
-#     return fig, ax
-
-
-def plot_adjacent_tile_pair(
-    tile1_name,
-    tile2_name,
-    transforms,
-    tile_names,
-    bucket_name,
-    dataset_path,
-    slice_index=None,
-    pyramid_level=0,
-    save=False,
-    output_dir=None,
-):
-    """
-    Plot a z-slice through two adjacent tiles in their transformed positions.
-    Transforms are relative to (0,0) at the center of the nominal grid.
-    Z-transform is applied before selecting the slice.
-
-    Args:
-        tile1_name, tile2_name: Names of tiles to compare
-        transforms: Dictionary mapping tile IDs to transformation matrices
-        tile_names: Dictionary mapping tile IDs to tile names
-        bucket_name: S3 bucket name
-        dataset_path: Path to dataset in bucket
-        slice_index: slice index in the zarr file
-        pyramid_level: Pyramid level to load
-        save: Whether to save the plot
-        output_dir: Directory to save plot if save=True
-    """
-    # Get the transformed and combined tile data
-    combined, extent, slice = get_transformed_tile_pair(
-        tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, slice_index, pyramid_level
-    )
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 8))
-    ax.set_facecolor("black")
-
-    # Plot combined image
-    ax.imshow(combined, extent=extent)
-
-    # Add tile information
-    pos1 = parse_tile_name(tile1_name)
-    pos2 = parse_tile_name(tile2_name)
-    ax.set_title(f"Tile Pair Comparison\nRed: {pos1} | Green: {pos2} | Yellow: Overlap\nZ-slice: {slice_index}")
-
-    # Set axis limits with padding
-    padding = 0.05  # 5% padding
-    x_range = extent[1] - extent[0]
-    y_range = extent[3] - extent[2]
-    ax.set_xlim(extent[0] - x_range * padding, extent[1] + x_range * padding)
-    ax.set_ylim(extent[2] - y_range * padding, extent[3] + y_range * padding)
-
-    if save and output_dir:
-        output_path = Path(output_dir) / f"tile_pair_{tile1_name}_{tile2_name}_z{slice_index}.png"
-        plt.savefig(output_path)
-        plt.close()
-    else:
-        plt.show()
-
-    return fig, ax
-
-
-def plot_adjacent_tile_pair_zoom(
-    tile1_name,
-    tile2_name,
-    transforms,
-    tile_names,
-    bucket_name,
-    dataset_path,
-    slice_index=None,
-    pyramid_level=0,
-    save=False,
-    output_dir=None,
-    zoom_padding=50,
-):
-    """
-    Plot a z-slice through two adjacent tiles in their transformed positions.
-    Transforms are relative to (0,0) at the center of the nominal grid.
-    Z-transform is applied before selecting the slice.
-
-    Args:
-        tile1_name, tile2_name: Names of tiles to compare
-        transforms: Dictionary mapping tile IDs to transformation matrices
-        tile_names: Dictionary mapping tile IDs to tile names
-        bucket_name: S3 bucket name
-        dataset_path: Path to dataset in bucket
-        slice_index: slice index in the zarr file, or str 'center' or 'max'
-        pyramid_level: Pyramid level to load
-        save: Whether to save the plot
-        output_dir: Directory to save plot if save=True
-        zoom_padding: Number of pixels to pad around the overlap region
-    """
-    # Get the transformed and combined tile data
-    combined, extent, slice_ind = get_transformed_tile_pair(
-        tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, slice_index, pyramid_level
-    )
-
-    # rotate the combined image 90 degrees if longer in y than x
-    if combined.shape[0] > combined.shape[1]:
-        combined = np.rot90(combined)
-        extent = [extent[2], extent[3], extent[0], extent[1]]
-
-    # Create figure with GridSpec for main view, zoom, and top regions
-
-    fig = plt.figure(figsize=(20, 8))
-    gs = gridspec.GridSpec(1, 4, width_ratios=[3, 1, 1, 1], wspace=0.05, hspace=0.05)
-
-    # Main view
-    ax_main = plt.subplot(gs[0])
-    ax_main.set_facecolor("black")
-
-    # Plot combined image
-    ax_main.imshow(combined, extent=extent)
-    ax_main.set_aspect("equal")
-
-    # Add tile information
-    pos1, ch = parse_tile_name(tile1_name)
-    pos2, ch = parse_tile_name(tile2_name)
-    ax_main.set_title(
-        f"Tile Pair Comparison\nRed: {pos1} | Green: {pos2} | Ch: {ch}\nZ-slice: {slice_index} - {slice_ind}"
-    )
-
-    # Set axis limits with padding
-    padding = 0.05  # 5% padding
-    x_range = extent[1] - extent[0]
-    y_range = extent[3] - extent[2]
-    ax_main.set_xlim(extent[0] - x_range * padding, extent[1] + x_range * padding)
-    ax_main.set_ylim(extent[2] - y_range * padding, extent[3] + y_range * padding)
-
-    # Find overlap region (where both red and green channels are present)
-    overlap_mask = np.logical_and(
-        combined[:, :, 0] > 0.05, combined[:, :, 1] > 0.05  # Red channel threshold  # Green channel threshold
-    )
-
-    # Make a brighter version of the combined image for zoomed views
-    brightness_factor = 1.5
-    brightened = np.clip(combined * brightness_factor, 0, 1)
-
-    if np.any(overlap_mask):
-        # Get the bounds of the overlap region
-        y_indices, x_indices = np.where(overlap_mask)
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-
-        # Add padding to the zoom region
-        y_min = max(0, y_min - zoom_padding)
-        y_max = min(combined.shape[0] - 1, y_max + zoom_padding)
-        x_min = max(0, x_min - zoom_padding)
-        x_max = min(combined.shape[1] - 1, x_max + zoom_padding)
-
-        # Calculate the pixel to coordinate mapping
-        pixel_width = (extent[1] - extent[0]) / combined.shape[1]
-        pixel_height = (extent[3] - extent[2]) / combined.shape[0]
-
-        # Calculate the extent of the zoom region
-        zoom_extent = [
-            extent[0] + x_min * pixel_width,
-            extent[0] + x_max * pixel_width,
-            extent[2] + y_min * pixel_height,
-            extent[2] + y_max * pixel_height,
-        ]
-        print(zoom_extent)
-
-        # Create zoom view
-        ax_zoom = plt.subplot(gs[1])
-        ax_zoom.set_facecolor("black")
-
-        # Plot zoomed region
-        ax_zoom.imshow(brightened, extent=extent)
-        ax_zoom.set_xlim(zoom_extent[0], zoom_extent[1])
-        ax_zoom.set_ylim(zoom_extent[2], zoom_extent[3])
-        # y off
-        ax_zoom.set_yticks([])
-
-        ax_zoom.set_title("Overlap")
-        ax_zoom.set_aspect("auto")
-
-        # get crop of overlap region for top and bottom
-        overlap_region = brightened[y_min:y_max, x_min:x_max]
-        overlap_mask_cropped = overlap_mask[y_min:y_max, x_min:x_max]
-
-        # get the top and bottom halves of the overlap region
-        h_mid = (y_max - y_min) // 2
-        top_region = overlap_region[:h_mid, :]
-        bottom_region = overlap_region[h_mid:, :]
-
-        overlap_start = np.where(overlap_mask_cropped)[1].min()
-        overlap_end = np.where(overlap_mask_cropped)[1].max()
-        overlap_start = max(0, overlap_start - 0.8 * (overlap_end - overlap_start))
-        overlap_end = min(bottom_region.shape[1], overlap_end + 0.8 * (overlap_end - overlap_start))
-
-        # create a subplot for the top half
-        ax_top = plt.subplot(gs[2])
-        ax_top.set_facecolor("black")
-        ax_top.imshow(top_region)
-        ax_top.set_xlim(overlap_start, overlap_end)
-        ax_top.set_aspect("auto")
-        ax_top.set_title("Overlap Top")
-        # y off
-        ax_top.set_yticks([])
-
-        # create a subplot for the bottom half
-        ax_bottom = plt.subplot(gs[3])
-        ax_bottom.set_facecolor("black")
-        ax_bottom.imshow(bottom_region)
-        ax_bottom.set_xlim(overlap_start, overlap_end)
-        ax_bottom.set_aspect("auto")
-        ax_bottom.set_title("Overlap Bottom")
-        # y off
-        ax_bottom.set_yticks([])
-
-    plt.tight_layout()
-
-    if save and output_dir:
-        output_path = Path(output_dir) / f"tile_pair_{pos1}_{pos2}_ch{ch}_z{slice_index}_pyr{pyramid_level}.png"
-
-        plt.savefig(output_path)
-        plt.close()
-    else:
-        plt.show()
-
-    return fig, ax_main
-
-
-def plot_adjacent_tile_pair_zoom2(
-    tile1_name,
-    tile2_name,
-    transforms,
-    tile_names,
-    bucket_name,
-    dataset_path,
-    slice_index=None,
-    pyramid_level=0,
-    save=False,
-    output_dir=None,
-    zoom_padding=50,
-):
-    """
-    Plot a z-slice through two adjacent tiles in their transformed positions.
-    Transforms are relative to (0,0) at the center of the nominal grid.
-    Z-transform is applied before selecting the slice.
-
-    Args:
-        tile1_name, tile2_name: Names of tiles to compare
-        transforms: Dictionary mapping tile IDs to transformation matrices
-        tile_names: Dictionary mapping tile IDs to tile names
-        bucket_name: S3 bucket name
-        dataset_path: Path to dataset in bucket
-        slice_index: slice index in the zarr file, or str 'center' or 'max'
-        pyramid_level: Pyramid level to load
-        save: Whether to save the plot
-        output_dir: Directory to save plot if save=True
-        zoom_padding: Number of pixels to pad around the overlap region
-    """
-    sns.set_context("talk")
-    # Get the transformed and combined tile data
-    combined, extent, slice_ind = get_transformed_tile_pair(
-        tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, slice_index, pyramid_level
-    )
-
-    # rotate the combined image 90 degrees if longer in y than x
-    if combined.shape[0] > combined.shape[1]:
-        combined = np.rot90(combined)
-        extent = [extent[2], extent[3], extent[0], extent[1]]
-
-    # Create figure with GridSpec for main view on top, zoom and sections below
-    fig = plt.figure(figsize=(20, 12))
-    gs = gridspec.GridSpec(2, 3, height_ratios=[1, 2.5], width_ratios=[1, 1, 1])
-
-    # Main view (spans all columns in top row)
-    ax_main = plt.subplot(gs[0, :])
-    ax_main.set_facecolor("black")
-
-    # Plot combined image
-    ax_main.imshow(combined, extent=extent)
-    ax_main.set_aspect("equal")
-
-    # Add tile information
-    pos1, ch = parse_tile_name(tile1_name)
-    pos2, ch = parse_tile_name(tile2_name)
-    ax_main.set_title(
-        f"Tile Pair Comparison\nRed: {pos1} | Green: {pos2} | Ch: {ch}\nZ-slice: {slice_index} - {slice_ind}"
-    )
-
-    # Set axis limits with padding
-    padding = 0.05  # 5% padding
-    x_range = extent[1] - extent[0]
-    y_range = extent[3] - extent[2]
-    ax_main.set_xlim(extent[0] - x_range * padding, extent[1] + x_range * padding)
-    ax_main.set_ylim(extent[2] - y_range * padding, extent[3] + y_range * padding)
-
-    # Find overlap region (where both red and green channels are present)
-    overlap_mask = np.logical_and(
-        combined[:, :, 0] > 0.05, combined[:, :, 1] > 0.05  # Red channel threshold  # Green channel threshold
-    )
-
-    # Make a brighter version of the combined image for zoomed views
-    brightness_factor = 1.5
-    brightened = np.clip(combined * brightness_factor, 0, 1)
-
-    if np.any(overlap_mask):
-        # Get the bounds of the overlap region
-        y_indices, x_indices = np.where(overlap_mask)
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-
-        # Add padding to the zoom region
-        y_min = max(0, y_min - zoom_padding)
-        y_max = min(combined.shape[0] - 1, y_max + zoom_padding)
-        x_min = max(0, x_min - zoom_padding)
-        x_max = min(combined.shape[1] - 1, x_max + zoom_padding)
-
-        # Calculate the pixel to coordinate mapping
-        pixel_width = (extent[1] - extent[0]) / combined.shape[1]
-        pixel_height = (extent[3] - extent[2]) / combined.shape[0]
-
-        # Calculate the extent of the zoom region
-        zoom_extent = [
-            extent[0] + x_min * pixel_width,
-            extent[0] + x_max * pixel_width,
-            extent[2] + y_min * pixel_height,
-            extent[2] + y_max * pixel_height,
-        ]
-        print(zoom_extent)
-
-        # Create zoom view in bottom left
-        ax_zoom = plt.subplot(gs[1, 0])
-        ax_zoom.set_facecolor("black")
-
-        # Plot zoomed region
-        ax_zoom.imshow(brightened, extent=extent)
-        ax_zoom.set_xlim(zoom_extent[0], zoom_extent[1])
-        ax_zoom.set_ylim(zoom_extent[2], zoom_extent[3])
-        # y off
-        ax_zoom.set_yticks([])
-
-        ax_zoom.set_title("Overlap")
-        ax_zoom.set_aspect("auto")
-
-        # Draw a rectangle on the main plot showing the zoom region
-        rect = plt.Rectangle(
-            (zoom_extent[0], zoom_extent[2]),
-            zoom_extent[1] - zoom_extent[0],
-            zoom_extent[3] - zoom_extent[2],
-            linewidth=1,
-            edgecolor="white",
-            facecolor="none",
-        )
-        ax_main.add_patch(rect)
-
-        # get crop of overlap region for top and bottom
-        overlap_region = brightened[y_min:y_max, x_min:x_max]
-        overlap_mask_cropped = overlap_mask[y_min:y_max, x_min:x_max]
-
-        # get the top and bottom halves of the overlap region
-        h_mid = (y_max - y_min) // 2
-        top_region = overlap_region[:h_mid, :]
-        bottom_region = overlap_region[h_mid:, :]
-
-        overlap_start = np.where(overlap_mask_cropped)[1].min()
-        overlap_end = np.where(overlap_mask_cropped)[1].max()
-        overlap_start = max(0, overlap_start - 0.8 * (overlap_end - overlap_start))
-        overlap_end = min(bottom_region.shape[1], overlap_end + 0.8 * (overlap_end - overlap_start))
-
-        # create a subplot for the top half in bottom middle
-        ax_top = plt.subplot(gs[1, 1])
-        ax_top.set_facecolor("black")
-        ax_top.imshow(top_region)
-        ax_top.set_xlim(overlap_start, overlap_end)
-        ax_top.set_aspect("auto")
-        ax_top.set_title("Overlap Top")
-        # y off
-        ax_top.set_yticks([])
-
-        # create a subplot for the bottom half in bottom right
-        ax_bottom = plt.subplot(gs[1, 2])
-        ax_bottom.set_facecolor("black")
-        ax_bottom.imshow(bottom_region)
-        ax_bottom.set_xlim(overlap_start, overlap_end)
-        ax_bottom.set_aspect("auto")
-        ax_bottom.set_title("Overlap Bottom")
-        # y off
-        ax_bottom.set_yticks([])
-
-    plt.tight_layout()
-
-    if save and output_dir:
-        output_path = Path(output_dir) / f"tile_pair_{pos1}_{pos2}_ch{ch}_z{slice_index}_pyr{pyramid_level}.png"
-
-        plt.savefig(output_path)
-        plt.close()
-    else:
-        plt.show()
-
-    return fig, ax_main
-
-
-def plot_adjacent_tile_pair_zoom3(
-    tile1_name,
-    tile2_name,
-    transforms,
-    tile_names,
-    bucket_name,
-    dataset_path,
-    slice_index=None,
-    pyramid_level=0,
-    save=False,
-    output_dir=None,
-    zoom_padding=50,
-):
-    """
-    Plot a z-slice through two adjacent tiles in their transformed positions.
-    Transforms are relative to (0,0) at the center of the nominal grid.
-    Z-transform is applied before selecting the slice.
-
-    Args:
-        tile1_name, tile2_name: Names of tiles to compare
-        transforms: Dictionary mapping tile IDs to transformation matrices
-        tile_names: Dictionary mapping tile IDs to tile names
-        bucket_name: S3 bucket name
-        dataset_path: Path to dataset in bucket
-        slice_index: slice index in the zarr file
-        pyramid_level: Pyramid level to load
-        save: Whether to save the plot
-        output_dir: Directory to save plot if save=True
-        zoom_padding: Number of pixels to pad around the overlap region
-    """
-    # Get the transformed and combined tile data
-    combined, extent, slice = get_transformed_tile_pair(
-        tile1_name, tile2_name, transforms, tile_names, bucket_name, dataset_path, slice_index, pyramid_level
-    )
-
-    # Create figure with GridSpec for main view, zoom, and vertical sections
-    fig = plt.figure(figsize=(18, 8))
-    gs = gridspec.GridSpec(1, 3, width_ratios=[3, 1, 1])
-
-    # Main view
-    ax_main = plt.subplot(gs[0])
-    ax_main.set_facecolor("black")
-
-    # Plot combined image
-    ax_main.imshow(combined, extent=extent)
-
-    # Add tile information
-    pos1 = parse_tile_name(tile1_name)
-    pos2 = parse_tile_name(tile2_name)
-    ax_main.set_title(f"Tile Pair Comparison\nRed: {pos1} | Green: {pos2} | Yellow: Overlap\nZ-slice: {slice_index}")
-
-    # Set axis limits with padding
-    padding = 0.05  # 5% padding
-    x_range = extent[1] - extent[0]
-    y_range = extent[3] - extent[2]
-    ax_main.set_xlim(extent[0] - x_range * padding, extent[1] + x_range * padding)
-    ax_main.set_ylim(extent[2] - y_range * padding, extent[3] + y_range * padding)
-
-    # Find overlap region (where both red and green channels are present)
-    overlap_mask = np.logical_and(
-        combined[:, :, 0] > 0.05, combined[:, :, 1] > 0.05  # Red channel threshold  # Green channel threshold
-    )
-
-    # Make a brighter version of the combined image for zoomed views
-    brightness_factor = 1.5
-    brightened = np.clip(combined * brightness_factor, 0, 1)
-
-    if np.any(overlap_mask):
-        # Get the bounds of the overlap region
-        y_indices, x_indices = np.where(overlap_mask)
-        y_min, y_max = np.min(y_indices), np.max(y_indices)
-        x_min, x_max = np.min(x_indices), np.max(x_indices)
-
-        # Add padding to the zoom region
-        y_min = max(0, y_min - zoom_padding)
-        y_max = min(combined.shape[0] - 1, y_max + zoom_padding)
-        x_min = max(0, x_min - zoom_padding)
-        x_max = min(combined.shape[1] - 1, x_max + zoom_padding)
-
-        # Calculate the pixel to coordinate mapping
-        pixel_width = (extent[1] - extent[0]) / combined.shape[1]
-        pixel_height = (extent[3] - extent[2]) / combined.shape[0]
-
-        # Calculate the extent of the zoom region
-        zoom_extent = [
-            extent[0] + x_min * pixel_width,
-            extent[0] + x_max * pixel_width,
-            extent[2] + y_min * pixel_height,
-            extent[2] + y_max * pixel_height,
-        ]
-
-        # Create zoom view
-        ax_zoom = plt.subplot(gs[1])
-        ax_zoom.set_facecolor("black")
-
-        # Plot zoomed region
-        ax_zoom.imshow(brightened, extent=extent)
-        ax_zoom.set_xlim(zoom_extent[0], zoom_extent[1])
-        ax_zoom.set_ylim(zoom_extent[2], zoom_extent[3])
-        ax_zoom.set_title("Overlap Region (Zoomed)")
-
-        # Add a small grid to the zoom view
-        ax_zoom.grid(True, color="white", alpha=0.2, linestyle=":")
-
-        # Create a nested GridSpec for the 2x2 vertical sections
-        gs_sections = gridspec.GridSpecFromSubplotSpec(2, 2, subplot_spec=gs[2])
-
-        # Calculate the height of each vertical section
-        section_height = (y_max - y_min) // 4
-
-        # Create 4 vertical sections
-        for i in range(4):
-            row = i // 2
-            col = i % 2
-
-            # Calculate the vertical bounds for this section
-            section_y_min = y_min + i * section_height
-            section_y_max = section_y_min + section_height
-
-            # Ensure the last section goes to the end
-            if i == 3:
-                section_y_max = y_max
-
-            # Calculate the extent of this section
-            section_extent = [
-                zoom_extent[0],
-                zoom_extent[1],
-                extent[2] + section_y_min * pixel_height,
-                extent[2] + section_y_max * pixel_height,
-            ]
-
-            # Create subplot
-            ax_section = plt.subplot(gs_sections[row, col])
-            ax_section.set_facecolor("black")
-
-            # Plot the section
-            ax_section.imshow(brightened, extent=extent)
-            ax_section.set_xlim(section_extent[0], section_extent[1])
-            ax_section.set_ylim(section_extent[2], section_extent[3])
-
-            # Turn off axis
-            ax_section.set_xticks([])
-            ax_section.set_yticks([])
-
-            # Draw a rectangle on the zoom view showing this section
-            rect = plt.Rectangle(
-                (section_extent[0], section_extent[2]),
-                section_extent[1] - section_extent[0],
-                section_extent[3] - section_extent[2],
-                linewidth=1,
-                edgecolor=["red", "green", "blue", "cyan"][i],
-                facecolor="none",
-            )
-            ax_zoom.add_patch(rect)
-
-            # Add a small colored marker in the corner of each section to match the rectangle
-            ax_section.plot(
-                section_extent[0] + 5 * pixel_width,
-                section_extent[2] + 5 * pixel_height,
-                "o",
-                color=["red", "green", "blue", "cyan"][i],
-                markersize=8,
-            )
-
-        # Add a title to the sections subplot area
-        plt.figtext(0.83, 0.95, "Vertical Sections", ha="center", va="center", fontsize=12)
-
-    else:
-        # If no overlap is found, just display a message
-        for ax_idx in [1, 2]:
-            ax = plt.subplot(gs[ax_idx])
-            ax.set_facecolor("black")
-            ax.text(0.5, 0.5, "No overlap detected", color="white", ha="center", va="center")
-            ax.set_xticks([])
-            ax.set_yticks([])
-            if ax_idx == 1:
-                ax.set_title("Overlap Region")
-            else:
-                ax.set_title("Vertical Sections")
-
-    plt.tight_layout()
-
-    if save and output_dir:
-        output_path = Path(output_dir) / f"tile_pair_{tile1_name}_{tile2_name}_z{slice_index}.png"
-        plt.savefig(output_path)
-        plt.close()
-    else:
-        plt.show()
-
-    return fig, ax_main
 
 
 def plot_all_adjacent_pairs(
@@ -3829,9 +2941,9 @@ def analyze_tile_overlap(
     Analyze the overlap between two tiles and return sliced data from overlapping regions.
     Automatically scales transformations based on pyramid level.
     """
-    # Get tile dimensions
-    tile1.connect()
-    tile2.connect()
+    # # Get tile dimensions
+    # tile1.connect()
+    # tile2.connect()
 
     # Scale transformations based on pyramid level
     def scale_transform(transform, pyramid_level):

@@ -22,6 +22,7 @@ dependencies = [
     'numpy',
     'scipy',
     'aind-ng-link',
+    'dask-iamge',
     'aind-hcr-data-loader',
     'xmltodict', # needed for parsers, which is hacked from aind-ng-link
     'aind-ng-link'
