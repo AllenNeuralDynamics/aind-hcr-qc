@@ -562,363 +562,406 @@ def calculate_net_transforms(view_transforms: dict[int, list[dict]]) -> dict[int
 #         return max_slices
 
 
-class PairedTiles:
+import warnings
+import numpy as np
+import dask.array as da
+from dask_image.ndinterp import affine_transform   # dask‑image ≥0.7
+from functools import partial
+
+
+def make_composite(
+    tile1: da.Array,
+    tile2: da.Array,
+    T1_fullres: np.ndarray,
+    T2_fullres: np.ndarray,
+    level1: int = 0,
+    level2: int = 0,
+    affine_tol: float = 1e‑2,
+    order: int = 1,
+    cval: float = 0.0,
+    clip_percentiles: tuple[int, int] = (1, 99),
+) -> da.Array:
     """
-    Class to hold a pair of adjacent tiles and visualize their overlap in 3D.
+    Warp two Z‑arr tiles (3‑D) into a common composite space and return
+    a lazy Dask array with 2 colour channels  (Red = tile1, Green = tile2).
 
-    This class handles translation-only registration between tiles and provides
-    methods to visualize slices through the composite volume in any orientation.
+    Parameters
+    ----------
+    tile1, tile2
+        Dask arrays with shape (Z, Y, X).  They may come from
+        `zarr.open(..., chunks=...)` or `ome_zarr.imread`.
+    T1_fullres, T2_fullres
+        4×4 affine matrices that map *full‑resolution* voxel indices
+        (tile‑local) → global physical space.
+    level1, level2
+        Pyramid level (0 == full‑res).  Each level is assumed to be
+        down‑sampled isotropically by 2**level.
+    affine_tol
+        If every element of `A - I` (the 3×3 affine block) is below this
+        tolerance **and** the diagonals are within `affine_tol`
+        of `1.0`, the transform is collapsed to pure translation and a
+        warning is emitted.
+    order
+        Spline interpolation order (0=nearest … 5= quintic).
+    cval
+        Fill value for areas outside the tile after warping.
+    clip_percentiles
+        Robust min/max percentiles applied *per tile* before normalising
+        to [0, 1] so the output channels are comparable.
+
+    Returns
+    -------
+    composite : dask.array.Array
+        Lazily‑evaluated array with shape (Zc, Yc, Xc, 2).
     """
 
-    def __init__(self, tile1, tile2, transform1, transform2, names=None, clip_percentiles=(1, 99)):
-        """
-        Initialize with two TileData objects and their transformation matrices.
+    # ------------------------------------------------------------------
+    # 1.  Prepare helper functions
+    # ------------------------------------------------------------------
 
-        Args:
-            tile1: First TileData object
-            tile2: Second TileData object
-            transform1: 4x4 transformation matrix for tile1
-            transform2: 4x4 transformation matrix for tile2
-            names: Optional tuple of (name1, name2) for the tiles
-            clip_percentiles: Tuple of (min_percentile, max_percentile) for intensity clipping
-        """
-        self.tile1 = tile1
-        self.tile2 = tile2
-        self.transform1 = transform1.copy()
-        self.transform2 = transform2.copy()
+    def _scale_transform(T, level):
+        """Down‑sample the translation by 2**level so it is expressed in
+        the pyramid's voxel units."""
+        out = T.copy().astype(np.float64)
+        out[:3, 3] /= 2 ** level
+        return out
 
-        self.pyramid_level1 = tile1.pyramid_level
-        self.pyramid_level2 = tile2.pyramid_level
+    def _collapse_if_near_translation(T_scaled):
+        """Return (A_inv, offset) in the form expected by
+        dask_image.ndinterp.affine_transform."""
+        A = T_scaled[:3, :3]
+        b = T_scaled[:3, 3]
 
-        self.shape1 = tile1.shape
-        self.shape2 = tile2.shape
-
-        # Store tile names
-        if names is None:
-            self.name1, self.channel1 = tile1.tile_name
-            self.name2, self.channel2 = tile2.tile_name
+        if np.allclose(A, np.eye(3), atol=affine_tol):
+            if not np.allclose(A, np.eye(3)):
+                warnings.warn(
+                    "Affine components are < affine_tol; using pure "
+                    "translation only.",
+                    stacklevel=2,
+                )
+            A_inv = np.eye(3)        # identity
+            offset = -b              # x_out → x_in  (no scaling/rotation)
         else:
-            self.name1, self.name2 = names
+            A_inv = np.linalg.inv(A)
+            offset = -A_inv @ b
+        return A_inv, offset
 
-        self.clip_percentiles = clip_percentiles
-
-        self._scale_transforms()
-        self._calculate_bounds()
-        self.load_data()
-
-    def _scale_transforms(self):
-        """Scale the translation components of transforms based on pyramid level."""
-        scale_factor1 = 2**self.pyramid_level1
-        self.scaled_transform1 = self.transform1.copy()
-        self.scaled_transform1[:3, 3] = self.scaled_transform1[:3, 3] / scale_factor1
-
-        scale_factor2 = 2**self.pyramid_level2
-        self.scaled_transform2 = self.transform2.copy()
-        self.scaled_transform2[:3, 3] = self.scaled_transform2[:3, 3] / scale_factor2
-
-        self.scale_factor1 = scale_factor1
-        self.scale_factor2 = scale_factor2
-
-    def _calculate_bounds(self):
-        """Calculate the global bounds for the composite volume."""
-        # For translation-only transforms, we need to find:
-        # 1. The minimum coordinates (for the origin of the composite array)
-        # 2. The maximum coordinates (to determine the size of the composite array)
-
-        # Get corners of tile1 in global space
-        shape1_zyx = np.array(self.shape1)  # (z, y, x)
-        corners1 = np.array(
-            [
-                [0, 0, 0],  # origin
-                [shape1_zyx[0], 0, 0],  # max z
-                [0, shape1_zyx[1], 0],  # max y
-                [0, 0, shape1_zyx[2]],  # max x
-                [shape1_zyx[0], shape1_zyx[1], 0],  # max z, y
-                [shape1_zyx[0], 0, shape1_zyx[2]],  # max z, x
-                [0, shape1_zyx[1], shape1_zyx[2]],  # max y, x
-                [shape1_zyx[0], shape1_zyx[1], shape1_zyx[2]],  # max z, y, x
-            ]
-        )
-
-        # Transform corners to global space (for translation only)
-        global_corners1 = corners1 + self.scaled_transform1[:3, 3]
-
-        # Repeat for tile2
-        shape2_zyx = np.array(self.shape2)
-        corners2 = np.array(
+    def _corners(shape):
+        """(8,3) array of zyx voxel corners."""
+        z, y, x = shape
+        return np.array(
             [
                 [0, 0, 0],
-                [shape2_zyx[0], 0, 0],
-                [0, shape2_zyx[1], 0],
-                [0, 0, shape2_zyx[2]],
-                [shape2_zyx[0], shape2_zyx[1], 0],
-                [shape2_zyx[0], 0, shape2_zyx[2]],
-                [0, shape2_zyx[1], shape2_zyx[2]],
-                [shape2_zyx[0], shape2_zyx[1], shape2_zyx[2]],
-            ]
+                [z, 0, 0],
+                [0, y, 0],
+                [0, 0, x],
+                [z, y, 0],
+                [z, 0, x],
+                [0, y, x],
+                [z, y, x],
+            ],
+            dtype=np.float64,
         )
 
-        global_corners2 = corners2 + self.scaled_transform2[:3, 3]
+    def _robust_normalise(dimg, p_lo, p_hi):
+        """Clip to percentiles then scale to [0, 1] lazily."""
+        lo, hi = da.percentile(dimg[dimg > 0], [p_lo, p_hi])
+        return da.clip((dimg - lo) / da.maximum(hi - lo, 1e-6), 0, 1)
 
-        # Combine all corners and find min/max
-        all_corners = np.vstack([global_corners1, global_corners2])
-        self.min_corner = np.floor(np.min(all_corners, axis=0)).astype(int)
-        self.max_corner = np.ceil(np.max(all_corners, axis=0)).astype(int)
+    # ------------------------------------------------------------------
+    # 2.  Scale transforms to *this* resolution level
+    # ------------------------------------------------------------------
+    T1 = _scale_transform(T1_fullres, level1)
+    T2 = _scale_transform(T2_fullres, level2)
 
-        # Calculate composite shape
-        self.composite_shape = self.max_corner - self.min_corner
+    # ------------------------------------------------------------------
+    # 3.  Build output grid: global bounding box in voxel coords
+    # ------------------------------------------------------------------
+    corners1 = (_corners(tile1.shape) @ T1[:3, :3].T) + T1[:3, 3]
+    corners2 = (_corners(tile2.shape) @ T2[:3, :3].T) + T2[:3, 3]
 
-        # Calculate offsets for each tile in the composite array
-        self.offset1 = (self.scaled_transform1[:3, 3] - self.min_corner).astype(int)
-        self.offset2 = (self.scaled_transform2[:3, 3] - self.min_corner).astype(int)
+    all_corners = np.vstack([corners1, corners2])
+    min_corner = np.floor(all_corners.min(axis=0)).astype(int)
+    max_corner = np.ceil(all_corners.max(axis=0)).astype(int)
 
-        # Print some debug info
-        print(f"Composite shape: {self.composite_shape}")
-        print(f"Tile1 offset: {self.offset1}")
-        print(f"Tile2 offset: {self.offset2}")
+    composite_shape = tuple(max_corner - min_corner)   # (Zc, Yc, Xc)
+    # ------------------------------------------------------------------
+    # 4.  Prepare warping parameters for both tiles
+    # ------------------------------------------------------------------
+    A1_inv, off1 = _collapse_if_near_translation(T1)
+    A2_inv, off2 = _collapse_if_near_translation(T2)
 
-    def load_data(self):
-        """Load and transform tile data into composite space with percentile clipping."""
-        composite_shape = tuple(self.composite_shape) + (3,)
-        self.composite = np.zeros(composite_shape, dtype=np.float32)
+    # *Shift* offsets so the composite frame starts at (0,0,0)
+    off1 = off1 + A1_inv @ min_corner
+    off2 = off2 + A2_inv @ min_corner
 
-        # data1 = self.tile1.data.copy().transpose(2,1,0)
-        # data2 = self.tile2.data.copy().transpose(2,1,0)
+    warp1 = partial(
+        affine_transform,
+        matrix=A1_inv,
+        offset=off1,
+        output_shape=composite_shape,
+        order=order,
+        mode="constant",
+        cval=cval,
+        prefilter=True,
+    )
+    warp2 = partial(
+        affine_transform,
+        matrix=A2_inv,
+        offset=off2,
+        output_shape=composite_shape,
+        order=order,
+        mode="constant",
+        cval=cval,
+        prefilter=True,
+    )
 
-        data1 = self.tile1.data.copy()
-        data2 = self.tile2.data.copy()
+    # ------------------------------------------------------------------
+    # 5.  Robust normalisation & warping  (all still lazy!)
+    # ------------------------------------------------------------------
+    tile1_norm = _robust_normalise(tile1, *clip_percentiles)
+    tile2_norm = _robust_normalise(tile2, *clip_percentiles)
 
-        print(f"Tile1 shape: {data1.shape}, non-zero pixels: {np.count_nonzero(data1)}")
-        print(f"Tile2 shape: {data2.shape}, non-zero pixels: {np.count_nonzero(data2)}")
+    warped1 = warp1(tile1_norm)
+    warped2 = warp2(tile2_norm)
 
-        min_percentile, max_percentile = self.clip_percentiles
+    # ------------------------------------------------------------------
+    # 6.  Stack into RG composite (Z, Y, X, 2)
+    # ------------------------------------------------------------------
+    composite = da.stack([warped1, warped2], axis=-1)
 
-        # Clip and normalize tile1 data
-        if np.any(data1 > 0):
-            # non zero for min
-            p_min1 = np.percentile(data1[data1 > 0], min_percentile)
-            p_max1 = np.percentile(data1[data1 > 0], max_percentile)
-            print(f"Tile1 percentiles: {min_percentile}% = {p_min1}, {max_percentile}% = {p_max1}")
+    return composite
 
-            data1_clipped = np.clip(data1, p_min1, p_max1)
+class PairedTiles:
+    """
+    Hold two adjacent OME‑Zarr tiles and lazily build an RGB composite
+    (red = tile 1, green = tile 2) using dask_image.ndinterp.affine_transform.
 
-            # normalize to [0, 1]
-            data1_norm = (
-                (data1_clipped - p_min1) / (p_max1 - p_min1) if p_max1 > p_min1 else np.zeros_like(data1_clipped)
-            )
-            print(f"Tile1 normalized range: {data1_norm.min()} to {data1_norm.max()}")
+    The heavy‑lifting is delegated to `make_composite()`, so the class is
+    basically a thin convenience wrapper plus a few visual helpers.
+    """
+
+    def __init__(
+        self,
+        tile1,
+        tile2,
+        transform1: np.ndarray,
+        transform2: np.ndarray,
+        names: tuple[str, str] | None = None,
+        clip_percentiles: tuple[int, int] = (1, 99),
+        affine_tol: float = 1e‑4,
+        order: int = 1,
+    ):
+        """
+        Parameters
+        ----------
+        tile1, tile2
+            Objects that expose `.data  # dask.array`
+            and `.pyramid_level`.  Many labs wrap ome‑zarr readers this way.
+        transform1, transform2
+            4×4 full‑resolution affines (tile‑local → global).
+        names
+            Optional `(name1, name2)` for display.
+        clip_percentiles, affine_tol, order
+            Passed straight through to `make_composite()`.
+        """
+        # --- store a couple of tiny metadata fields ---------------------
+        self.tile1 = tile1
+        self.tile2 = tile2
+        self.name1, self.name2 = (
+            names if names is not None else (tile1.tile_name, tile2.tile_name)
+        )
+
+        # --- build composite lazily -------------------------------------
+        self.composite: da.Array = make_composite(
+            tile1.data,
+            tile2.data,
+            transform1,
+            transform2,
+            level1=tile1.pyramid_level,
+            level2=tile2.pyramid_level,
+            affine_tol=affine_tol,
+            order=order,
+            clip_percentiles=clip_percentiles,
+        )
+
+        # convenience fields
+        self.shape = self.composite.shape[:-1]        # (Zc, Yc, Xc)
+        self.dtype  = self.composite.dtype
+
+        # overlap mask: still lazy, calculates at compute time
+        self.overlap_mask: da.Array = (self.composite[..., 0] > 0) & (
+            self.composite[..., 1] > 0
+        )
+
+    # ------------------------------------------------------------------
+    # visual helpers: napari slices, QC stats, etc.
+    # ------------------------------------------------------------------
+    def quick_mip(self, axis: int = 0) -> da.Array:
+        """Return a lazy max‑intensity projection of the RGB composite."""
+        return self.composite.max(axis=axis)
+
+    def overlap_fraction(self) -> da.Array:
+        """Lazy scalar = (# non‑zero voxels in both channels) / (# in either)."""
+        both   = self.overlap_mask.sum()
+        either = ((self.composite[..., 0] > 0) | (self.composite[..., 1] > 0)).sum()
+        return both / da.maximum(either, 1)           # avoid div‑by‑zero
+
+    # ---------------------------------------------------------------------
+    #  Back‑compat helper (old code expected self.composite_shape)
+    # ---------------------------------------------------------------------
+    @property
+    def composite_shape(self) -> tuple[int, int, int]:
+        """Return (Z, Y, X) voxels of the RGB composite (channels excluded)."""
+        return self.shape            # self.shape set in __init__
+
+
+    # ---------------------------------------------------------------------
+    #  Slice utilities
+    # ---------------------------------------------------------------------
+    def get_slice(
+        self,
+        index: int,
+        orientation: str = "xy",
+        overlap_only: bool = False,
+        padding: int = 20,
+    ):
+        """
+        Return a NumPy RGB slice (channels last) extracted from the composite.
+
+        Parameters
+        ----------
+        index          : slice index along the slicing dimension
+        orientation    : 'xy'  (Z‑index) |
+                        'zy'  (X‑index) |
+                        'zx'  (Y‑index)
+        overlap_only   : if True, crop to the region where *both* tiles overlap
+                        and then add `padding` voxels all around.
+        padding        : number of voxels to extend the overlap crop.
+        """
+        # Map orientation → (slice‑axis, slice expression)
+        if orientation == "xy":                 # XY plane at Z = index
+            if index >= self.shape[0]:
+                raise IndexError(f"Z index {index} ≥ {self.shape[0]}")
+            slice_da  = self.composite[index, :, :, :]     # (Y,X,3)
+            mask_da   = self.overlap_mask[index, :, :] if overlap_only else None
+
+        elif orientation == "zy":               # ZY plane at X = index
+            if index >= self.shape[2]:
+                raise IndexError(f"X index {index} ≥ {self.shape[2]}")
+            slice_da  = self.composite[:, :, index, :]     # (Z,Y,3)
+            mask_da   = self.overlap_mask[:, :, index] if overlap_only else None
+
+        elif orientation == "zx":               # ZX plane at Y = index
+            if index >= self.shape[1]:
+                raise IndexError(f"Y index {index} ≥ {self.shape[1]}")
+            slice_da  = self.composite[:, index, :, :]     # (Z,X,3)
+            mask_da   = self.overlap_mask[:, index, :] if overlap_only else None
+
         else:
-            data1_norm = np.zeros_like(data1, dtype=np.float32)
-            p_min1, p_max1 = 0, 0
+            raise ValueError("orientation must be 'xy', 'zy', or 'zx'")
 
-        # Clip and normalize tile2 data
-        if np.any(data2 > 0):
-            p_min2 = np.percentile(data2[data2 > 0], min_percentile)
-            p_max2 = np.percentile(data2[data2 > 0], max_percentile)
-            print(f"Tile2 percentiles: {min_percentile}% = {p_min2}, {max_percentile}% = {p_max2}")
+        # Bring the slice (and mask) into memory – only the needed slab!
+        slice_np = slice_da.compute()
+        mask_np  = mask_da.compute() if mask_da is not None else None
 
-            data2_clipped = np.clip(data2, p_min2, p_max2)
+        # Optionally crop to overlap region
+        if overlap_only and mask_np is not None and mask_np.any():
+            rows, cols = np.where(mask_np)
+            rmin, rmax = rows.min(), rows.max()
+            cmin, cmax = cols.min(), cols.max()
 
-            # Normalize to [0, 1]
-            data2_norm = (
-                (data2_clipped - p_min2) / (p_max2 - p_min2) if p_max2 > p_min2 else np.zeros_like(data2_clipped)
-            )
-            print(f"Tile2 normalized range: {data2_norm.min()} to {data2_norm.max()}")
-        else:
-            data2_norm = np.zeros_like(data2, dtype=np.float32)
-            p_min2, p_max2 = 0, 0
+            # pad, but stay inside bounds
+            rmin = max(0, rmin - padding)
+            rmax = min(slice_np.shape[0] - 1, rmax + padding)
+            cmin = max(0, cmin - padding)
+            cmax = min(slice_np.shape[1] - 1, cmax + padding)
 
-        self.percentile_values = {"tile1": (p_min1, p_max1), "tile2": (p_min2, p_max2)}
+            slice_np = slice_np[rmin : rmax + 1, cmin : cmax + 1, :]
 
-        # put data into composite
-        z1, y1, x1 = data1.shape
-        oz1, oy1, ox1 = self.offset1
+        return slice_np
 
-        print(f"Tile1 offset in composite: {self.offset1}")
-        print(f"Tile2 offset in composite: {self.offset2}")
 
-        # Calculate the actual space available in the composite array
-        z1_space = min(z1, self.composite_shape[0] - oz1)
-        y1_space = min(y1, self.composite_shape[1] - oy1)
-        x1_space = min(x1, self.composite_shape[2] - ox1)
-
-        if z1_space < z1 or y1_space < y1 or x1_space < x1:
-            print("Warning: Tile1 extends beyond composite bounds. Clipping tile data.")
-            print(f"Available space: {z1_space}, {y1_space}, {x1_space}")
-
-        # Place tile1 data, clipping if necessary
-        self.composite[oz1 : oz1 + z1_space, oy1 : oy1 + y1_space, ox1 : ox1 + x1_space, 0] = data1_norm[
-            :z1_space, :y1_space, :x1_space
-        ]
-
-        # Tile2 goes into green channel
-        z2, y2, x2 = data2.shape
-        oz2, oy2, ox2 = self.offset2
-
-        # Calculate the actual space available in the composite array
-        z2_space = min(z2, self.composite_shape[0] - oz2)
-        y2_space = min(y2, self.composite_shape[1] - oy2)
-        x2_space = min(x2, self.composite_shape[2] - ox2)
-
-        if z2_space < z2 or y2_space < y2 or x2_space < x2:
-            print("Warning: Tile2 extends beyond composite bounds. Clipping tile data.")
-            print(f"Available space: {z2_space}, {y2_space}, {x2_space}")
-
-        # Place tile2 data, clipping if necessary
-        self.composite[oz2 : oz2 + z2_space, oy2 : oy2 + y2_space, ox2 : ox2 + x2_space, 1] = data2_norm[
-            :z2_space, :y2_space, :x2_space
-        ]
-
-        # print(f"Composite shape: {self.composite_shape}")
-        # # Rotate composite 90 degrees if height < width
-        # if self.composite_shape[1] < self.composite_shape[0]:
-        #     self.composite = np.rot90(self.composite, k=-1, axes=(0,1))
-        #     self.should_rotate = True
-        # else:
-        #     self.should_rotate = False
-        # Create overlap mask (where both tiles have data)
-        self.overlap_mask = (self.composite[..., 0] > 0) & (self.composite[..., 1] > 0)
-        # if self.should_rotate:
-        #     self.overlap_mask = np.rot90(self.overlap_mask, k=-1, axes=(0,1))
-
-        overlap_volume = np.sum(self.overlap_mask)
-        total_volume = np.prod(self.composite_shape)
-        print(f"Overlap volume: {overlap_volume} voxels ({overlap_volume/total_volume:.2%} of composite)")
-
-        print(f"Red channel (Tile1) max value in composite: {self.composite[..., 0].max()}")
-        print(f"Green channel (Tile2) max value in composite: {self.composite[..., 1].max()}")
-
-    def get_slice(self, index, orientation="xy", overlap_only=False, padding=20):
+    def visualize_slice(
+        self,
+        index: int,
+        orientation: str = "xy",
+        overlap_only: bool = False,
+        ax=None,
+        padding: int = 20,
+        rotate_z: bool = True,
+    ):
         """
-        Get a slice from the composite volume.
-
-        Args:
-            index: Index along the slicing dimension
-            orientation: One of 'xy', 'zy', 'zx'
-            overlap_only: If True, show only the overlap region
-            padding: Number of pixels to pad around overlap region
-
-        Returns:
-            RGB slice data
+        Display a composite slice with Matplotlib.  Returns (fig, ax).
         """
-        if orientation == "xy":
-            if index >= self.composite_shape[2]:
-                raise IndexError(f"Z index {index} out of bounds (max {self.composite_shape[2]-1})")
-            slice_data = self.composite[:, :, index, :]
-            slice_mask = self.overlap_mask[:, :, index] if overlap_only else None
+        import matplotlib.pyplot as plt
 
-        elif orientation == "zy":
-            if index >= self.composite_shape[0]:
-                raise IndexError(f"X index {index} out of bounds (max {self.composite_shape[0]-1})")
-            slice_data = self.composite[index, :, :, :]
-            slice_mask = self.overlap_mask[index, :, :] if overlap_only else None
+        img = self.get_slice(index, orientation, overlap_only, padding)
 
-        elif orientation == "zx":
-            if index >= self.composite_shape[1]:
-                raise IndexError(f"Y index {index} out of bounds (max {self.composite_shape[1]-1})")
-            slice_data = self.composite[:, index, :, :]
-            slice_mask = self.overlap_mask[:, index, :] if overlap_only else None
-
-        else:
-            raise ValueError(f"Unknown orientation: {orientation}. Use 'xy', 'zy', or 'zx'")
-
-        # If overlap_only is True, find the overlap region and add padding
-        if overlap_only and slice_mask is not None:
-            # Find the bounds of overlap region
-            rows, cols = np.where(slice_mask)
-            if len(rows) > 0 and len(cols) > 0:
-                rmin, rmax = rows.min(), rows.max()
-                cmin, cmax = cols.min(), cols.max()
-
-                # Add padding
-                rmin = max(0, rmin - padding)
-                rmax = min(slice_data.shape[0], rmax + padding)
-                cmin = max(0, cmin - padding)
-                cmax = min(slice_data.shape[1], cmax + padding)
-
-                # Crop to padded overlap region
-                slice_data = slice_data[rmin : rmax + 1, cmin : cmax + 1]
-            else:
-                # No overlap found
-                slice_data = np.zeros((1, 1, 3))
-
-        return slice_data
-
-    def visualize_slice(self, index, orientation="xy", overlap_only=False, ax=None, padding=20, rotate_z=True):
-        """
-        Visualize a slice from the composite volume.
-        Shows the overlap region with padding if overlap_only is True.
-
-        Args:
-            index: Index along the slicing dimension
-            orientation: One of 'xy', 'zy', 'zx' (default 'xy')
-            overlap_only: If True, show only the overlap region
-            ax: Matplotlib axis to plot on
-            padding: Number of pixels to pad around overlap region
-            rotate_z: If True, display Z as the vertical axis in XZ and YZ views
-        """
-        slice_data = self.get_slice(index, orientation, overlap_only, padding=padding)
+        # Rotate so Z is “up” if desired
+        if rotate_z and orientation in {"zy", "zx"}:
+            img = np.rot90(img, 3)
 
         if ax is None:
-            fig, ax = plt.subplots(figsize=(10, 8))
+            fig, ax = plt.subplots(figsize=(6, 6))
         else:
             fig = ax.figure
 
-        # Rotate the slice if needed
-        if rotate_z and orientation in ["zx", "zy"]:
-            slice_data = np.rot90(slice_data, 3)
+        ax.imshow(img)
+        ax.axis("off")
 
-        ax.imshow(slice_data)
-
-        # Adjust axis labels based on rotation
+        # axis labels
         if rotate_z:
-            axis_labels = {
-                "xy": ("Y", "X", "Z"),  # XY view unchanged
-                "zy": ("Z", "Y", "X"),  # YZ view becomes ZY
-                "zx": ("Z", "X", "Y"),  # XZ view becomes ZX
+            labels = {
+                "xy": ("X", "Y", "Z"),
+                "zy": ("Y", "Z", "X"),   # after rot90 → Z vertical
+                "zx": ("X", "Z", "Y"),
             }
         else:
-            axis_labels = {"xy": ("Y", "X", "Z"), "zy": ("Y", "Z", "X"), "zx": ("X", "Z", "Y")}
+            labels = {
+                "xy": ("X", "Y", "Z"),
+                "zy": ("Z", "Y", "X"),
+                "zx": ("Z", "X", "Y"),
+            }
 
-        ylabel, xlabel, slice_dim = axis_labels[orientation]
+        xlabel, ylabel, sdim = labels[orientation]
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
-        ax.set_title(f"{orientation.upper()} slice at {slice_dim}={index}")
+        ax.set_title(f"{orientation.upper()} slice at {sdim}={index}")
 
         return fig, ax
 
+
     def visualize_orthogonal_views(
-        self, z_slice=None, y_slice=None, x_slice=None, overlap_only=False, padding=20, rotate_z=True
+        self,
+        z_slice: int | None = None,
+        y_slice: int | None = None,
+        x_slice: int | None = None,
+        overlap_only: bool = False,
+        padding: int = 20,
+        rotate_z: bool = True,
     ):
         """
-        Visualize orthogonal views of the composite volume.
-
-        Args:
-            z_slice, y_slice, x_slice: Slice indices
-            overlap_only: If True, show only the overlap region
-            padding: Number of pixels to pad around overlap region
-            rotate_z: If True, display Z as the vertical axis in XZ and YZ views
+        Show XY / ZX / ZY views side‑by‑side.
         """
-        # Use middle slices by default
-        if x_slice is None:
-            x_slice = self.composite_shape[0] // 2
-        if y_slice is None:
-            y_slice = self.composite_shape[1] // 2
-        if z_slice is None:
-            z_slice = self.composite_shape[2] // 2
+        import matplotlib.pyplot as plt
+
+        z_slice = z_slice or self.shape[0] // 2
+        y_slice = y_slice or self.shape[1] // 2
+        x_slice = x_slice or self.shape[2] // 2
 
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
-        # Plot views with padding
-        self.visualize_slice(z_slice, "xy", overlap_only, axes[0], padding=padding, rotate_z=rotate_z)
-        self.visualize_slice(y_slice, "zx", overlap_only, axes[1], padding=padding, rotate_z=rotate_z)
-        self.visualize_slice(x_slice, "zy", overlap_only, axes[2], padding=padding, rotate_z=rotate_z)
+        self.visualize_slice(z_slice, "xy", overlap_only, axes[0], padding, rotate_z)
+        self.visualize_slice(y_slice, "zx", overlap_only, axes[1], padding, rotate_z)
+        self.visualize_slice(x_slice, "zy", overlap_only, axes[2], padding, rotate_z)
 
-        plt.suptitle(f"Orthogonal Views of Paired Tiles\n{self.name1} (red) and {self.name2} (green)", fontsize=16)
-
+        fig.suptitle(
+            f"Orthogonal Views\n{self.name1} (red) vs {self.name2} (green)",
+            fontsize=16,
+        )
         plt.tight_layout()
         plt.subplots_adjust(top=0.85)
-
         return fig, axes
 
 
