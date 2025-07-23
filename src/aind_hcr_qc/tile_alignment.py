@@ -582,6 +582,8 @@ def make_composite(
     order: int = 1,
     cval: float = 0.0,
     clip_percentiles: tuple[int, int] = (1, 99),
+    translation_only: bool = False, # NOT IMPLEMENTED
+    return_percentiles: bool = True,
 ) -> da.Array:
     """
     Warp two Z‑arr tiles (3‑D) into a common composite space and return
@@ -672,10 +674,20 @@ def make_composite(
             dtype=np.float64,
         )
 
+    # def _robust_normalise(dimg, p_lo, p_hi):
+    #     """Clip to percentiles then scale to [0, 1] lazily."""
+    #     lo, hi = da.percentile(dimg[dimg > 0], [p_lo, p_hi])
+    #     return da.clip((dimg - lo) / da.maximum(hi - lo, 1e-6), 0, 1)
+
     def _robust_normalise(dimg, p_lo, p_hi):
-        """Clip to percentiles then scale to [0, 1] lazily."""
-        lo, hi = da.percentile(dimg[dimg > 0], [p_lo, p_hi])
-        return da.clip((dimg - lo) / da.maximum(hi - lo, 1e-6), 0, 1)
+        mask = dimg > 0
+        if not mask.any():
+            lo = hi = da.asarray(0.0, dtype=dimg.dtype)
+            norm = da.zeros_like(dimg)
+        else:
+            lo, hi = da.percentile(dimg[mask], [p_lo, p_hi])
+            norm = da.clip((dimg - lo) / da.maximum(hi - lo, 1e-6), 0, 1)
+        return norm, (lo, hi)
 
     # ------------------------------------------------------------------
     # 2.  Scale transforms to *this* resolution level
@@ -728,8 +740,8 @@ def make_composite(
     # ------------------------------------------------------------------
     # 5.  Robust normalisation & warping  (all still lazy!)
     # ------------------------------------------------------------------
-    tile1_norm = _robust_normalise(tile1, *clip_percentiles)
-    tile2_norm = _robust_normalise(tile2, *clip_percentiles)
+    tile1_norm, p1 = _robust_normalise(tile1, *clip_percentiles)
+    tile2_norm, p2 = _robust_normalise(tile2, *clip_percentiles)
 
     warped1 = warp1(tile1_norm)
     warped2 = warp2(tile2_norm)
@@ -738,6 +750,13 @@ def make_composite(
     # 6.  Stack into RG composite (Z, Y, X, 2)
     # ------------------------------------------------------------------
     composite = da.stack([warped1, warped2], axis=-1)
+
+
+    if return_percentiles:
+        # Convert Dask scalars → Python floats so they survive outside Dask
+        p1 = tuple(map(float, da.compute(*p1)))
+        p2 = tuple(map(float, da.compute(*p2)))
+        return composite, {"tile1": p1, "tile2": p2}
 
     return composite
 
@@ -783,7 +802,7 @@ class PairedTiles:
         self.percentile_values = clip_percentiles
 
         # --- build composite lazily -------------------------------------
-        self.composite: da.Array = make_composite(
+        result = make_composite(
             tile1._data, # assuming tile1._data is a dask array
             tile2._data, # assuming tile2._data is a dask array
             transform1,
@@ -794,6 +813,8 @@ class PairedTiles:
             order=order,
             clip_percentiles=clip_percentiles,
         )
+
+        self.composite, self.percentile_values = result
 
         # convenience fields
         self.shape = self.composite.shape[:-1]        # (Zc, Yc, Xc)
