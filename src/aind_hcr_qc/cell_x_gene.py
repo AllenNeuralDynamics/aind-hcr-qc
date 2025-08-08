@@ -554,7 +554,7 @@ def calculate_cluster_percentages(cluster_labels):
     return cluster_df
 
 
-def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False):
+def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False, output_dir=Path("/root/capsule/scratch/")):
     """
     Plot the centroids of a specific cluster.
 
