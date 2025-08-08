@@ -565,7 +565,7 @@ def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False):
     plot_cluster_df = cell_info_clusters[cell_info_clusters["cluster_label"] == cluster_n]
 
     # Set the cluster label to 1 for plotting purposes
-    plot_cluster_df[:, "cluster_label"] = 1
+    plot_cluster_df["cluster_label"] = 1
 
     # Get the maximum x and y coordinates for setting limits
     max_x = cell_info_clusters["x_centroid"].max()
