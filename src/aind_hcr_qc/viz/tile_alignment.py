@@ -12,7 +12,7 @@ from matplotlib.patches import Polygon
 from scipy import ndimage
 
 # from ng_link import parsers
-import aind_hcr_qc.parsers as parsers
+import aind_hcr_qc.utils.parsers as parsers
 
 
 def load_tile_data(
