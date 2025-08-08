@@ -582,7 +582,7 @@ def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False):
         show_colorbar=False,
         fig_size=(4, 4),
         save=save,
-        output_dir=Path("/root/capsule/scratch/"),
+        output_dir=output_dir,
         title_str=f"Cluster {cluster_n}",
     )
 
