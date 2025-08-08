@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-import gene_plotter  # REFACTOR
+# import gene_plotter
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -327,8 +327,9 @@ def fig_cell_centroids_comparison(cell_df, cell_df_filt, orientation="XY", save=
     return fig
 
 
-# import gene_plotter # REFACTOR
-# def plot_single_cell_segmentation_overview(dataset, round_n, pyramid_level, plot_channel, plot_cell_id, num_planes=10):
+# def plot_single_cell_segmentation_overview(
+#     dataset, round_n, pyramid_level, plot_channel, plot_cell_id, num_planes=10, view="multi"
+# ):
 #     """
 #     Plots the segmentation overview for a given cell.
 
@@ -339,26 +340,28 @@ def fig_cell_centroids_comparison(cell_df, cell_df_filt, orientation="XY", save=
 #     plot_channel (str): The channel to plot (e.g., '405').
 #     plot_cell_id (int): The cell ID to plot.
 #     num_planes (int): Number of planes to extract for visualization. Default is 10.
+#     view (bool): If True, plots multiple views of the cell. Default is True.
 
 #     Returns:
 #     None
 #     """
 #     # Get cell info as numpy array
-#     cell_info_array = dataset.get_cell_info(source="segmentation").to_numpy()
-
+#     # cell_info_array = dataset.get_cell_info(source="segmentation").to_numpy()
+#     cell_info = dataset.rounds[round_n].get_cell_info(source="mixed_cxg")
+#     cell_info_array = cell_info[["z_centroid", "y_centroid", "x_centroid", "cell_id"]].to_numpy()
 #     # Load segmentation mask and image data
 #     segmentation_zarr = dataset.load_segmentation_mask(round_n, pyramid_level)
 #     seg_image_zarr = dataset.load_zarr_channel(round_n, plot_channel, data_type="fused", pyramid_level=pyramid_level)
 
 #     # Extract cell volume
 #     seg_crop, img_crop, masks_only, cell_mask_only, origin, z_planes, x_planes = gene_plotter.extract_cell_volume(
-#         segmentation_zarr,
-#         seg_image_zarr,
-#         cell_info_array,
-#         plot_cell_id,
-#         num_planes=num_planes
+#         segmentation_zarr, seg_image_zarr, cell_info_array, plot_cell_id, num_planes=num_planes
 #     )
 
+#     # find matching cell_id in cell_info_array (last column)
+#     centroid = cell_info_array[cell_info_array[:, -1] == plot_cell_id, :3].flatten()
+#     if centroid.size == 0:
+#         raise ValueError(f"Cell ID {plot_cell_id} not found in cell_info_array.")
 #     # Plot segmentation overview
 #     gene_plotter.plot_segmentation_overview(
 #         seg_crop,
@@ -453,6 +456,19 @@ def plot_single_cell_segmentation_overview(
 #             num_planes=5,
 #             view="multi"
 #         )
+#     elif view == "single":
+#         fig = gene_plotter.plot_segmentation_overview_single(
+#             seg_crop,
+#             img_crop,
+#             masks_only,
+#             cell_mask_only,
+#             plot_cell_id,
+#             origin,
+#             centroid,
+#             z_planes,
+#             x_planes,
+#         )
+#     return fig
 
 
 def qc_segmentation(

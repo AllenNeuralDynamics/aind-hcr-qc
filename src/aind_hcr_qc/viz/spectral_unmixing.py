@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from . import utils
+from aind_hcr_qc.utils import utils
 
 # ------------------------------------------------------------------------------------
 # Utils
