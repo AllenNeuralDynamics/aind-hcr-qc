@@ -3,14 +3,14 @@ from .cell_x_gene import (
     plot_cell_x_gene_clustered,
     plot_cell_x_gene_simple,
 )
-from .cells import (
-    plot_single_cell_expression_all_rounds,
-)
-from .segmentation import (
+
+# from .cells import (
+#     plot_single_cell_expression_all_rounds,
+# )
+from .segmentation import (  # plot_single_cell_segmentation_overview,
     fig_cell_centroids_comparison,
     fig_centroids_filtered,
     plot_centroids,
-    plot_single_cell_segmentation_overview,
     qc_segmentation,
 )
 from .spectral_unmixing import (
@@ -33,5 +33,5 @@ __all__ = [
     "fig_centroids_filtered",
     "plot_pairwise_intensities_multi_ratios",
     # cells
-    "plot_single_cell_expression_all_rounds",
+    # "plot_single_cell_expression_all_rounds",
 ]
