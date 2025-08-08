@@ -1,10 +1,12 @@
+from pathlib import Path
+
+import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 from sklearn.cluster import KMeans
-from pathlib import Path
-import matplotlib.gridspec as gridspec
+
 # -------------------------------------------------------------------------------------------------
 # Data handling functions
 # -------------------------------------------------------------------------------------------------
@@ -70,14 +72,16 @@ def load_mean_cxg(dataset, mean_csv_dict, value="mean"):
     return mean_cxg
 
 
-def spot_count_cell_x_gene_coreg(dataset, 
-                                 coreg_spots, 
-                                 ophys_mfish_match_df,
-                                 save_coreg_spots=False,
-                                 output_dir=None,
-                                 filtered_spots=True,
-                                 r=0.3,
-                                 dist=1):
+def spot_count_cell_x_gene_coreg(
+    dataset,
+    coreg_spots,
+    ophys_mfish_match_df,
+    save_coreg_spots=False,
+    output_dir=None,
+    filtered_spots=True,
+    r=0.3,
+    dist=1,
+):
     """
     Create a cell x gene table from the coregistered spots.
     Used for July 2025 data club, may refactor later.
@@ -90,32 +94,31 @@ def spot_count_cell_x_gene_coreg(dataset,
     """
     mouse_id = dataset.mouse_id
     if filtered_spots:
-        coreg_spots_filtered = coreg_spots[(coreg_spots['r'] > r) & (coreg_spots['dist'] < dist)]
+        coreg_spots_filtered = coreg_spots[(coreg_spots["r"] > r) & (coreg_spots["dist"] < dist)]
         print(f"Number of coregistered mixed spots after filtering: {len(coreg_spots_filtered)}")
     else:
         coreg_spots_filtered = coreg_spots
         print(f"Number of coregistered mixed spots without filtering: {len(coreg_spots_filtered)}")
-    spot_counts = coreg_spots_filtered.groupby(['round','chan','cell_id']).size().reset_index(name='spot_count')
+    spot_counts = coreg_spots_filtered.groupby(["round", "chan", "cell_id"]).size().reset_index(name="spot_count")
     ch_gene_table = dataset.create_channel_gene_table(spots_only=True)
-    spot_counts = spot_counts.merge(ch_gene_table, left_on=['round', 'chan'], 
-                                    right_on = ["Round", "Channel"], how='left')
-    spot_counts = spot_counts.drop(columns=['Round', 'Channel'])
-    spot_counts = spot_counts.rename(columns={'Gene': 'gene'})
+    spot_counts = spot_counts.merge(ch_gene_table, left_on=["round", "chan"], right_on=["Round", "Channel"], how="left")
+    spot_counts = spot_counts.drop(columns=["Round", "Channel"])
+    spot_counts = spot_counts.rename(columns={"Gene": "gene"})
 
-
-    gene_order = spot_counts['gene'].unique()
-    spot_counts_pivot = spot_counts.pivot(index='cell_id', 
-                                        columns='gene', values='spot_count',
-                                        ).fillna(0)
+    gene_order = spot_counts["gene"].unique()
+    spot_counts_pivot = spot_counts.pivot(
+        index="cell_id",
+        columns="gene",
+        values="spot_count",
+    ).fillna(0)
     spot_counts_pivot = spot_counts_pivot.reindex(columns=gene_order, fill_value=0)
 
-
     # save the spot counts to a csv file
-    spot_counts_merged= spot_counts.merge(ophys_mfish_match_df, left_on='cell_id', right_on='ls_id', how='left')
+    spot_counts_merged = spot_counts.merge(ophys_mfish_match_df, left_on="cell_id", right_on="ls_id", how="left")
     if save_coreg_spots and output_dir is not None:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        spot_counts_merged.to_csv(Path(output_dir / f'{mouse_id}_cxg_mixed_spot_counts.csv'), index=False)
+        spot_counts_merged.to_csv(Path(output_dir / f"{mouse_id}_cxg_mixed_spot_counts.csv"), index=False)
     return spot_counts, spot_counts_pivot, spot_counts_merged
 
 
@@ -402,7 +405,7 @@ def plot_centroids_with_hist(
     x_coord, y_coord, plane = coords[orientation]
 
     # Create figure with subplots
-    #fig, (ax_scatter, ax_hist) = plt.subplots(1, 2, figsize=fig_size, gridspec_kw={"width_ratios": [3, 1]})
+    # fig, (ax_scatter, ax_hist) = plt.subplots(1, 2, figsize=fig_size, gridspec_kw={"width_ratios": [3, 1]})
 
     fig = plt.figure(figsize=(fig_size))
     gs = gridspec.GridSpec(1, 2, width_ratios=[3, 1], wspace=0.2)
@@ -430,7 +433,7 @@ def plot_centroids_with_hist(
     else:
         ax_scatter.set_ylim(df[y_coord].min() - 10, df[y_coord].max() + 10)
 
-    #ax_scatter.set_aspect("equal", adjustable="box")
+    # ax_scatter.set_aspect("equal", adjustable="box")
     ax_scatter.set_xlabel(f"{x_coord}")
     ax_scatter.set_ylabel(f"{y_coord}")
     ax_scatter.set_title(f"{plane}")
@@ -535,55 +538,54 @@ def plot_centroids_with_hist(
 def calculate_cluster_percentages(cluster_labels):
     """
     Calculate the percentage of each cluster size relative to the total number of cells.
-    
+
     Parameters:
     cluster_labels (array-like): Array of cluster labels for each cell.
-    
+
     Returns:
     pd.DataFrame: DataFrame containing cluster sizes and their percentages.
     """
     cluster_sizes = np.bincount(cluster_labels)
     total_cells = len(cluster_labels)
     cluster_percentages = cluster_sizes / total_cells * 100
-    cluster_df = pd.DataFrame({
-        'Cluster': np.arange(len(cluster_sizes)),
-        'Size': cluster_sizes,
-        'Percentage': cluster_percentages
-    })
+    cluster_df = pd.DataFrame(
+        {"Cluster": np.arange(len(cluster_sizes)), "Size": cluster_sizes, "Percentage": cluster_percentages}
+    )
     return cluster_df
 
 
 def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False):
     """
     Plot the centroids of a specific cluster.
-    
+
     Parameters:
     cluster_n (int): The cluster number to plot.
     """
     # Filter the cell_info_clusters DataFrame for the specified cluster
-    plot_cluster_df = cell_info_clusters[cell_info_clusters['cluster_label'] == cluster_n]
-    
+    plot_cluster_df = cell_info_clusters[cell_info_clusters["cluster_label"] == cluster_n]
+
     # Set the cluster label to 1 for plotting purposes
-    plot_cluster_df[:, 'cluster_label'] = 1
-    
+    plot_cluster_df[:, "cluster_label"] = 1
+
     # Get the maximum x and y coordinates for setting limits
-    max_x = cell_info_clusters['x_centroid'].max()
-    max_y = cell_info_clusters['y_centroid'].max()
-    
+    max_x = cell_info_clusters["x_centroid"].max()
+    max_y = cell_info_clusters["y_centroid"].max()
+
     # Plot the centroids with histogram
-    fig = plot_centroids_with_hist(plot_cluster_df,
-                                  orientation="XY",
-                                  color_col="cluster_label",
-                                  cmap="Greys_r",
-                                  xlims=(0, max_x),
-                                  ylims=(0, max_y),
-                                  show_colorbar=False,
-                                  fig_size=(4, 4),
-                                  save=save,
-                                  output_dir=Path("/root/capsule/scratch/"),
-                                  title_str=f"Cluster {cluster_n}",
-                                  )
-    
+    fig = plot_centroids_with_hist(
+        plot_cluster_df,
+        orientation="XY",
+        color_col="cluster_label",
+        cmap="Greys_r",
+        xlims=(0, max_x),
+        ylims=(0, max_y),
+        show_colorbar=False,
+        fig_size=(4, 4),
+        save=save,
+        output_dir=Path("/root/capsule/scratch/"),
+        title_str=f"Cluster {cluster_n}",
+    )
+
     # if not save:
     #     #plt.show()
 

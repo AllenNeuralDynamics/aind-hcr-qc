@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import gene_plotter  # REFACTOR
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -372,14 +373,10 @@ def fig_cell_centroids_comparison(cell_df, cell_df_filt, orientation="XY", save=
 #     plt.show()
 #     return
 
-import gene_plotter  # REFACTOR
-def plot_single_cell_segmentation_overview(dataset, 
-                                           round_n, 
-                                           pyramid_level, 
-                                           plot_channel, 
-                                           plot_cell_id, 
-                                           num_planes=10, 
-                                           view="multi"):
+
+def plot_single_cell_segmentation_overview(
+    dataset, round_n, pyramid_level, plot_channel, plot_cell_id, num_planes=10, view="multi"
+):
     """
     Plots the segmentation overview for a given cell.
 
@@ -396,7 +393,7 @@ def plot_single_cell_segmentation_overview(dataset,
     None
     """
     # Get cell info as numpy array
-    #cell_info_array = dataset.get_cell_info(source="segmentation").to_numpy()
+    # cell_info_array = dataset.get_cell_info(source="segmentation").to_numpy()
     cell_info = dataset.rounds[round_n].get_cell_info(source="mixed_cxg")
     cell_info_array = cell_info[["z_centroid", "y_centroid", "x_centroid", "cell_id"]].to_numpy()
     # Load segmentation mask and image data
@@ -405,11 +402,7 @@ def plot_single_cell_segmentation_overview(dataset,
 
     # Extract cell volume
     seg_crop, img_crop, masks_only, cell_mask_only, origin, z_planes, x_planes = gene_plotter.extract_cell_volume(
-        segmentation_zarr,
-        seg_image_zarr,
-        cell_info_array,
-        plot_cell_id,
-        num_planes=num_planes
+        segmentation_zarr, seg_image_zarr, cell_info_array, plot_cell_id, num_planes=num_planes
     )
 
     # find matching cell_id in cell_info_array (last column)
@@ -431,21 +424,20 @@ def plot_single_cell_segmentation_overview(dataset,
         )
     elif view == "single":
         fig = gene_plotter.plot_segmentation_overview_single(
-                seg_crop,
-                img_crop,
-                masks_only,
-                cell_mask_only,
-                plot_cell_id,
-                origin,
-                centroid,
-                z_planes,
-                x_planes,
-            )
+            seg_crop,
+            img_crop,
+            masks_only,
+            cell_mask_only,
+            plot_cell_id,
+            origin,
+            centroid,
+            z_planes,
+            x_planes,
+        )
     return fig
 
 
 # plot_single_cell_segmentation_overview_multi_round():
-
 
 
 #     plot_cell_id = 20951
@@ -513,6 +505,3 @@ def qc_segmentation(
             print(f"Centroid comparison plot saved for orientation {orientation} to: {qc_dir}")
     if verbose:
         print(f"Segmentation QC plots saved to: {qc_dir}")
-
-
-        
