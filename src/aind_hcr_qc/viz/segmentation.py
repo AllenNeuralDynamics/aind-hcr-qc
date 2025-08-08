@@ -1,12 +1,24 @@
 """Segmentation"""
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Tuple
 
 # import gene_plotter
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from aind_hcr_data_loader.hcr_dataset import HCRDataset
+
+import aind_hcr_qc.io.zarr_data as zarr_data
+
+# -----------------------------------------------------------------------------
+# PLOTTING PRIMITIVES
+# -----------------------------------------------------------------------------
+
+# Constants for colours
+_CHANNEL_COLORS = ["green", "blue", "orange", "red", "purple"]
 
 
 def plot_cell_volume_and_diameter(
@@ -377,6 +389,138 @@ def fig_cell_centroids_comparison(cell_df, cell_df_filt, orientation="XY", save=
 #     return
 
 
+def plot_segmentation_overview(
+    seg_crop: np.ndarray,
+    img_crop: np.ndarray,
+    masks_only: np.ndarray,
+    cell_mask_only: np.ndarray,
+    cell_id: int,
+    origin: Tuple[int, int, int],
+    centroid: Tuple[int, int, int],
+    z_planes: np.ndarray,
+    x_planes: np.ndarray,
+    *,
+    delta: int = 3,
+    # figsize: Tuple[int, int] = (10, 10),
+):
+    """Visualise *x–z* and *z–y* slices through the cell.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    # calc figure size based on number of planes
+    num_planes = max(len(z_planes), len(x_planes))
+    figsize = (5, 2 * num_planes)  # width, height
+    num_planes = len(z_planes)
+    fig, axes = plt.subplots(num_planes, 2, figsize=figsize, constrained_layout=True)
+
+    # --------------------------------------------------------------
+    #  x–z planes (left column) – iterate over *x* indices
+    # --------------------------------------------------------------
+    for i, xp in enumerate(x_planes):
+        ax = axes[i, 0]
+        img = img_crop[:, :, xp - delta : xp + delta + 1].max(axis=2)
+        ax.imshow(img.T, cmap="gray", aspect="auto")
+        ax.imshow(masks_only[:, :, xp].T, alpha=0.25, cmap="magma", aspect="auto")
+        ax.imshow(cell_mask_only[:, :, xp].T, alpha=0.25, cmap="hsv", aspect="auto")
+        ax.set_title(f"x = {origin[2] + xp}")
+        ax.set_xlabel("z")
+        ax.set_ylabel("y")
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    # --------------------------------------------------------------
+    #  z–y planes (right column) – iterate over *z* indices
+    # --------------------------------------------------------------
+    for i, zp in enumerate(z_planes):
+        ax = axes[i, 1]
+        img = img_crop[zp - delta : zp + delta + 1, :, :].max(axis=0)
+        ax.imshow(img, cmap="gray", aspect="auto")
+        ax.imshow(masks_only[zp], alpha=0.25, cmap="magma", aspect="auto")
+        ax.imshow(cell_mask_only[zp], alpha=0.25, cmap="hsv", aspect="auto")
+        ax.set_title(f"z = {origin[0] + zp}")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.suptitle(f"Cell {cell_id} - Centroid {centroid}", y=1.02)
+    return fig
+
+
+def plot_segmentation_overview_single(
+    seg_crop: np.ndarray,
+    img_crop: np.ndarray,
+    masks_only: np.ndarray,
+    cell_mask_only: np.ndarray,
+    cell_id: int,
+    origin: Tuple[int, int, int],
+    centroid: Tuple[int, int, int],
+    z_planes: np.ndarray,
+    x_planes: np.ndarray,
+    *,
+    delta: int = 3,
+):
+    """Visualise only *z–y* slices through the cell in a tight layout.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    # Calculate figure size based on number of z planes
+    num_planes = len(z_planes)
+    figsize = (num_planes * 2, 2)  # Width, height - compact
+
+    # Create figure with single column
+    fig = plt.figure(figsize=figsize)
+
+    # Use gridspec for truly adjacent subplots with no spacing
+    gs = fig.add_gridspec(1, num_planes, hspace=0, wspace=0)
+
+    # --------------------------------------------------------------
+    #  z–y planes (single column) – iterate over *z* indices
+    # --------------------------------------------------------------
+    for i, zp in enumerate(z_planes):
+        ax = fig.add_subplot(gs[0, i])
+        img = img_crop[zp - delta : zp + delta + 1, :, :].max(axis=0)
+        # trim whichever axis bigger to make square
+        if img.shape[0] > img.shape[1]:
+            img = img[:, : img.shape[0]]
+        elif img.shape[1] > img.shape[0]:
+            img = img[: img.shape[1], :]
+
+        print(img.shape)
+        # ax.imshow(img, cmap="gray", aspect="auto")
+        # ax.imshow(masks_only[zp], alpha=0.25, cmap="magma", aspect="auto")
+        # ax.imshow(
+        #     cell_mask_only[zp], alpha=0.25, cmap="hsv", aspect="auto"
+        # )
+        # calc percentil for vmin and vmax
+        vmin, vmax = np.percentile(img, [0, 99.9])
+        ax.imshow(img, cmap="gray", aspect="auto", vmin=vmin, vmax=vmax)
+        ax.imshow(masks_only[zp], alpha=0.25, cmap="magma", aspect="auto")
+        ax.imshow(cell_mask_only[zp], alpha=0.25, cmap="hsv", aspect="auto")
+
+        # No axes, no ticks, no labels
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.axis("off")
+
+        # Mark z plane in the top left corner
+        ax.text(
+            5,
+            15,  # Pixel coordinates
+            f"z={origin[0] + zp}",
+            color="white",
+            fontsize=12,
+            bbox=dict(facecolor="black", alpha=0.6, pad=1),
+        )
+
+    # Remove all spacing around the figure
+    plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0)
+    return fig
+
+
 def plot_single_cell_segmentation_overview(
     dataset, round_n, pyramid_level, plot_channel, plot_cell_id, num_planes=10, view="multi"
 ):
@@ -404,7 +548,7 @@ def plot_single_cell_segmentation_overview(
     seg_image_zarr = dataset.load_zarr_channel(round_n, plot_channel, data_type="fused", pyramid_level=pyramid_level)
 
     # Extract cell volume
-    seg_crop, img_crop, masks_only, cell_mask_only, origin, z_planes, x_planes = gene_plotter.extract_cell_volume(
+    seg_crop, img_crop, masks_only, cell_mask_only, origin, z_planes, x_planes = zarr_data.extract_cell_volume(
         segmentation_zarr, seg_image_zarr, cell_info_array, plot_cell_id, num_planes=num_planes
     )
 
@@ -414,7 +558,7 @@ def plot_single_cell_segmentation_overview(
         raise ValueError(f"Cell ID {plot_cell_id} not found in cell_info_array.")
     # Plot segmentation overview
     if view == "multi":
-        fig = gene_plotter.plot_segmentation_overview(
+        fig = plot_segmentation_overview(
             seg_crop,
             img_crop,
             masks_only,
@@ -426,7 +570,7 @@ def plot_single_cell_segmentation_overview(
             x_planes,
         )
     elif view == "single":
-        fig = gene_plotter.plot_segmentation_overview_single(
+        fig = plot_segmentation_overview_single(
             seg_crop,
             img_crop,
             masks_only,
@@ -438,37 +582,6 @@ def plot_single_cell_segmentation_overview(
             x_planes,
         )
     return fig
-
-
-# plot_single_cell_segmentation_overview_multi_round():
-
-
-#     plot_cell_id = 20951
-#     rounds = ["R2", "R3", "R4", "R5"]
-
-#     for round_n in rounds:
-#         seg.plot_single_cell_segmentation_overview(
-#             dataset=rose_dataset,
-#             round_n=round_n,
-#             pyramid_level="0",
-#             plot_channel="405",
-#             plot_cell_id=plot_cell_id,
-#             num_planes=5,
-#             view="multi"
-#         )
-#     elif view == "single":
-#         fig = gene_plotter.plot_segmentation_overview_single(
-#             seg_crop,
-#             img_crop,
-#             masks_only,
-#             cell_mask_only,
-#             plot_cell_id,
-#             origin,
-#             centroid,
-#             z_planes,
-#             x_planes,
-#         )
-#     return fig
 
 
 def qc_segmentation(
