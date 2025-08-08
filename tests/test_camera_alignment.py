@@ -12,7 +12,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from numpy.testing import assert_allclose
 
-from aind_hcr_qc.camera_alignment import (
+from aind_hcr_qc.viz.camera_alignment import (
     _extract_translation_stats,
     load_tile_metrics,
     plot_translation_distributions,
