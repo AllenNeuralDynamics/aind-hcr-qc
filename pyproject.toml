@@ -19,6 +19,8 @@ dynamic = ["version"]
 dependencies = [
     'matplotlib',
     'seaborn',
+    'scikit-learn',
+    'scikit-image',
     'numpy',
     'scipy',
     'aind-ng-link',
