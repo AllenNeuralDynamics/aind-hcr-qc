@@ -489,7 +489,7 @@ def plot_segmentation_overview_single(
         elif img.shape[1] > img.shape[0]:
             img = img[: img.shape[1], :]
 
-        print(img.shape)
+        logger.debug(f"img.shape: {img.shape}")
         # ax.imshow(img, cmap="gray", aspect="auto")
         # ax.imshow(masks_only[zp], alpha=0.25, cmap="magma", aspect="auto")
         # ax.imshow(
