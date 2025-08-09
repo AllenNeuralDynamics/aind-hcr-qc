@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Tuple
 
@@ -12,6 +13,8 @@ import seaborn as sns
 from aind_hcr_data_loader.hcr_dataset import HCRDataset
 
 import aind_hcr_qc.io.zarr_data as zarr_data
+
+logger = logging.getLogger(__name__)
 
 # -----------------------------------------------------------------------------
 # PLOTTING PRIMITIVES
