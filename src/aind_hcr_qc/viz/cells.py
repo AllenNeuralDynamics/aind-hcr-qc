@@ -29,8 +29,8 @@ def plot_single_cell_expression_all_rounds(
     ----------
     plot_cell_id : int
         The cell ID to visualize across rounds
-     dataset : HCRDataset, optional
-        The HCR dataset object containing the imaging data, by default None
+    dataset : HCRDataset
+        The HCR dataset object containing the imaging data
     rounds : list of str
         List of round identifiers (e.g., ["R1", "R2", "R3"])
     pyramid_level : str, optional
