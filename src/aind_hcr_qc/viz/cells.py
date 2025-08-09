@@ -440,7 +440,7 @@ def plot_top_spot_count_cells_batch(
     import pandas as pd
 
     if verbose:
-        print("\n{'='*80}")
+        print(f"\n{'='*80}")
         print(f"PLOTTING TOP {n_top_cells} CELLS FOR EACH GENE - ROUND {round_key}")
         print("Combined Auto + Fixed Intensity Scaling")
         print("{'='*80}")
