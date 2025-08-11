@@ -32,6 +32,21 @@ Quality control analysis for AIND HCR data processing. Provides tools for valida
 
 Intergration will AIND QC portal will happen when team identifies and evaluates essential plots.
 
+## Change log
+**v0.3.9 (8/11/2025)**
++ Add spot detection visualization function to plot top 10 cells per gene based on spot count
++ Implement segmentation overview plotting with single and multi-view options
++ Create comprehensive cell expression plotting functions for multi-round HCR analysis
++ Extract and modularize zarr data processing utilities for cell data and masks
++ Example notebook for single cell plots
+
+**v0.3.8 (8/08/2025)**
++ refactor file tree to use "viz" api for simplified access to plotting functions
+
+**v0.3.7 (8/01/2025)**
++ Adds a new plot_spot_metric_dist function for analyzing spot quality distributions with correlation and distance thresholds
++ Introduces cluster-based centroid plotting capabilities and cell x gene analysis for coregistered spots
++ Updates channel color mapping and improves plot layout consistency
 
 ## Installation
 To use the software, in the root directory, run
