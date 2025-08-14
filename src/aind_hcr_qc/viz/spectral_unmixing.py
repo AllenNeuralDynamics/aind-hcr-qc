@@ -1038,6 +1038,7 @@ def plot_filtered_intensities(
     mouse_id,
     plot_cell_ids=None,
     channel_label="unmixed_chan",
+    scale="linear",
     filters=None,
     save=False,
     save_dir=Path("../scratch"),
@@ -1074,7 +1075,7 @@ def plot_filtered_intensities(
     # Apply filters
 
     # Create plot
-    fig = plot_pairwise_intensities_multi_ratios(filtered_df, plot_cell_ids, scale="linear", chan_col=channel_label)
+    fig = plot_pairwise_intensities_multi_ratios(filtered_df, plot_cell_ids, scale=scale, chan_col=channel_label)
 
     # Add filters to plot title
     title_filters = ", ".join([f"{k}={v}" for k, v in filters.items()])

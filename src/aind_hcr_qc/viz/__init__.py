@@ -15,6 +15,7 @@ from .segmentation import (
 )
 from .spectral_unmixing import (
     plot_pairwise_intensities_multi_ratios,
+    plot_filtered_intensities,
 )
 from .tile_alignment import (
     qc_tile_alignment,
@@ -37,6 +38,7 @@ __all__ = [
     "fig_centroids_filtered",
     # spectral unmixing
     "plot_pairwise_intensities_multi_ratios",
+    "plot_filtered_intensities",
     # cells
     "plot_single_cell_expression_all_rounds",
 ]
