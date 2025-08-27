@@ -192,6 +192,7 @@ def plot_cell_x_gene_clustered(
     k=3,
     add_cluster_labels=True,
     cbar_label="Gene Expression Count",
+    ax=None
 ):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
@@ -258,7 +259,10 @@ def plot_cell_x_gene_clustered(
         # Remove helper columns
         cxg = cxg.drop(["cluster", "total_expression"], axis=1)
 
-    fig, ax = plt.subplots(figsize=fig_size)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=fig_size)
+    else:
+        fig = ax.figure
 
     # Plot the heatmap
     im = ax.imshow(cxg, aspect="auto", cmap="gray_r", interpolation="none")
@@ -590,3 +594,6 @@ def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False, output_dir
     #     #plt.show()
 
     return fig
+
+
+

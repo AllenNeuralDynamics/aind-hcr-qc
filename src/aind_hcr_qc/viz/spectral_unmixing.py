@@ -123,7 +123,8 @@ def plot_spot_count(
     fig = plt.figure(figsize=figsize)
 
     # Calculate grid layout (try to make it roughly square)
-    cols = int(np.ceil(np.sqrt(n_genes)))
+    #cols = int(np.ceil(np.sqrt(n_genes)))
+    cols = 3
     rows = int(np.ceil(n_genes / cols))
 
     # Create subplots for each gene
@@ -740,7 +741,7 @@ def plot_dye_lines(ax, chan1_name, chan2_name, ratios_norm, scale="log", colors=
 
 
 def plot_pairwise_intensities_multi_ratios(
-    df, cell_ids, scale="log", chan_col="unmixed_chan", title_prefix=None, same_limits=False, ratios=None
+    df, cell_ids, scale="log", chan_col="unmixed_chan", title_prefix=None, same_limits=False, x_lims = None, y_lims = None, ratios=None
 ):
     """
     Creates 2D scatter plots comparing channel intensities pairwise for multiple cells.
@@ -798,7 +799,7 @@ def plot_pairwise_intensities_multi_ratios(
     nrows = num_channels - 1  # Number of rows needed for lower triangle
     ncols = num_channels - 1  # Maximum number of columns per row
 
-    fig = plt.figure(figsize=(4 * ncols, 4 * nrows))
+    fig = plt.figure(figsize=(3 * ncols, 3 * nrows))
 
     # Create a grid layout for our triangular plot arrangement
     grid = plt.GridSpec(nrows, ncols, figure=fig)
@@ -912,14 +913,20 @@ def plot_pairwise_intensities_multi_ratios(
                         x,
                         y,
                         c=channel_colors.get(unmixed_chan, "gray"),
-                        alpha=0.02,  # Lower alpha for dense plots
-                        s=0.1,
+                        alpha=0.08,  # Lower alpha for dense plots
+                        s=0.3,
                     )  # Smaller points for combined view
 
             # Set axis labels
-            ax.set_xlabel(f"{chan2} Intensity ({scale} scale)")
-            ax.set_ylabel(f"{chan1} Intensity ({scale} scale)")
-            ax.set_title(f"{chan1} vs {chan2}")
+            #ax.set_xlabel(f"{chan2} Intensity ({scale} scale)")
+            #ax.set_ylabel(f"{chan1} Intensity ({scale} scale)")
+            #ax.set_title(f"{chan1} vs {chan2}")
+
+            # ONLY ADD X LABEL TO BOTTOM ROW AND Y LABEL TO LEFT COLUMN
+            if row == nrows - 1:  # Last row
+                ax.set_xlabel(f"{chan2}", fontsize=22)
+            if col == 0:  # First column
+                ax.set_ylabel(f"{chan1}", fontsize=22)
 
             # Remove individual legends from the subplots
             # Don't add legend here - we'll add a global one at the end
@@ -941,8 +948,8 @@ def plot_pairwise_intensities_multi_ratios(
                         ax.set_ylim(0, max_val)
                     else:
                         # Use percentile-based limits for linear scale as in your example
-                        x_lim = np.percentile(x_all, 99.99) if len(x_all) > 0 else 1
-                        y_lim = np.percentile(y_all, 99.99) if len(y_all) > 0 else 1
+                        x_lim = np.percentile(x_all, 99.) if len(x_all) > 0 else 1
+                        y_lim = np.percentile(y_all, 99.) if len(y_all) > 0 else 1
                         if y_lim > 10000:
                             y_lim = 10000
                         if x_lim > 10000:
@@ -950,8 +957,10 @@ def plot_pairwise_intensities_multi_ratios(
                         x_low = np.percentile(x_all, 3) if len(x_all) > 0 else 0
                         y_low = np.percentile(y_all, 3) if len(y_all) > 0 else 0
 
-                        ax.set_xlim(-x_low, x_lim)
-                        ax.set_ylim(-y_low, y_lim)
+                        #ax.set_xlim(-x_low, x_lim)
+                        #ax.set_ylim(-y_low, y_lim)
+                        ax.set_xlim(-200, x_lim)
+                        ax.set_ylim(-200, y_lim)
                 else:
                     # If no data points were plotted, use default limits
                     x_all = transform_intensity(all_cell_data[x_col], scale)
@@ -963,6 +972,11 @@ def plot_pairwise_intensities_multi_ratios(
                         max_val = max(x_max, y_max) * 1.1
                         ax.set_xlim(0, max_val)
                         ax.set_ylim(0, max_val)
+
+            if x_lims is not None:
+                ax.set_xlim(x_lims)
+            if y_lims is not None:
+                ax.set_ylim(y_lims)
 
             # Plot dye lines if ratios matrix is provided - AFTER setting axis limits
             if ratios_norm is not None:
@@ -1038,7 +1052,9 @@ def plot_filtered_intensities(
     mouse_id,
     plot_cell_ids=None,
     channel_label="unmixed_chan",
-    scale="linear",
+    scale="linear",\
+    xlims = None,
+    ylims = None,
     filters=None,
     save=False,
     save_dir=Path("../scratch"),
@@ -1064,7 +1080,7 @@ def plot_filtered_intensities(
         list: List containing the figure
     """
     if plot_cell_ids is None:
-        plot_cell_ids = list(range(1, 20000))
+        plot_cell_ids = list(range(1, 100000))
 
     if filters is not None:
         filtered_df = utils.apply_filters_to_df(plot_df, filters)
@@ -1075,11 +1091,12 @@ def plot_filtered_intensities(
     # Apply filters
 
     # Create plot
-    fig = plot_pairwise_intensities_multi_ratios(filtered_df, plot_cell_ids, scale=scale, chan_col=channel_label)
+    fig = plot_pairwise_intensities_multi_ratios(filtered_df, plot_cell_ids, scale=scale, chan_col=channel_label, x_lims=xlims, y_lims=ylims)
 
     # Add filters to plot title
     title_filters = ", ".join([f"{k}={v}" for k, v in filters.items()])
-    fig[0].suptitle(f"{round_n}\n filter: {title_filters}", fontsize=16)
+    #fig[0].suptitle(f"{round_n}\n filter: {title_filters}", fontsize=16)
+    fig[0].suptitle(f"Round: {round_n}", fontsize=16)
 
     # Update channel legend label if legend exists
     legend = fig[0].axes[0].get_legend()
