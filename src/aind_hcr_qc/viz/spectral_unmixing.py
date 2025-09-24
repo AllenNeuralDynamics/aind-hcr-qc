@@ -1007,7 +1007,7 @@ def plot_pairwise_intensities_multi_ratios(
                 [0], [0], marker="o", color=color, markersize=8, linestyle="", markerfacecolor=color, alpha=1.0
             )
             channel_markers.append(marker)
-            channel_labels.append(f"Channel {chan} ({chan_count} spots)")
+            channel_labels.append(f"{chan} (n={chan_count})")
 
     # Add dye line handles if any
     if legend_handles:
@@ -1025,8 +1025,8 @@ def plot_pairwise_intensities_multi_ratios(
             channel_markers,
             channel_labels,
             loc="center",
-            title="Channels",
-            frameon=True,
+            #title="Channels",
+            frameon=False,
             framealpha=0.8,
             scatterpoints=1,
         )
@@ -1043,18 +1043,34 @@ def plot_pairwise_intensities_multi_ratios(
     # Adjust layout - tighter spacing and better use of available space
     plt.tight_layout(rect=[0, 0, 1, 0.93])  # Leave space for the title
 
+    # if only 1 ax, put legend outside
+    if num_channels == 2:
+        # Move legend outside the plot
+        fig.subplots_adjust(right=0.8)
+        legend_ax.legend(
+            channel_markers,
+            channel_labels,
+            loc="center left",
+            bbox_to_anchor=(1, 0.5),
+            frameon=False,
+            framealpha=0.8,
+            scatterpoints=1,
+        )
+
+        # Resize figure to accommodate legend
+        #fig.set_size_inches(8, 6)
+
     return [fig]
 
 
 def plot_filtered_intensities(
     plot_df,
-    round_n,
-    mouse_id,
     plot_cell_ids=None,
     channel_label="unmixed_chan",
-    scale="linear",\
+    scale="linear",
     xlims = None,
     ylims = None,
+    title = None,
     filters=None,
     save=False,
     save_dir=Path("../scratch"),
@@ -1096,8 +1112,14 @@ def plot_filtered_intensities(
     # Add filters to plot title
     title_filters = ", ".join([f"{k}={v}" for k, v in filters.items()])
     #fig[0].suptitle(f"{round_n}\n filter: {title_filters}", fontsize=16)
-    fig[0].suptitle(f"Round: {round_n}", fontsize=16)
-
+    if title is not None:
+        if filters != {}:
+            st = f"{title}\n filter: {title_filters}"
+        else:
+            st = f"{title}"
+        fig[0].suptitle(st, fontsize=16)
+    else:
+        fig[0].suptitle(f"Filter: {title_filters}", fontsize=16)
     # Update channel legend label if legend exists
     legend = fig[0].axes[0].get_legend()
     if legend is not None:
@@ -1105,7 +1127,6 @@ def plot_filtered_intensities(
 
     # Save plot if requested
     if save:
-        save_dir = save_dir / f"{mouse_id}"
         save_dir.mkdir(parents=True, exist_ok=True)
         filters_str = utils.filter_dict_to_string(filters)
         # change channel_label, "unmixed_chan" -> unmixed, "chan" -> mixed
