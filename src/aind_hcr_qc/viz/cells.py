@@ -7,6 +7,7 @@ from typing import List
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 from aind_hcr_data_loader.hcr_dataset import HCRDataset
+from aind_hcr_qc.utils.utils import saveable_plot
 
 import aind_hcr_qc.io.zarr_data as zarr_data
 
@@ -15,8 +16,10 @@ import aind_hcr_qc.io.zarr_data as zarr_data
 # -------------------------------------------------------------------------------------------------
 
 
+@saveable_plot()
 def plot_single_cell_expression_all_rounds(
-    plot_cell_id: int, dataset: HCRDataset, pyramid_level: str = "0", rounds: List[str] = None, verbose: bool = False
+    plot_cell_id: int, dataset: HCRDataset, pyramid_level: str = "0", rounds: List[str] = None, vmin_vmax = "auto", verbose: bool = False,
+    linear_unmix_matrix=None
 ) -> plt.Figure:
     """
     Plot single cell expression across multiple HCR rounds in a compact vertical layout.
@@ -92,12 +95,13 @@ def plot_single_cell_expression_all_rounds(
                 round_key=round_n,
                 cell_id=plot_cell_id,
                 pyramid_level=pyramid_level,
-                vmin_vmax="auto",  # Use 5th-95th percentile
+                vmin_vmax=vmin_vmax,  # Use 5th-95th percentile
                 plot_mask_outlines=True,
                 trim_to_square=True,  # Default - trim to square
                 figsize=None,  # Wide figure for single row
                 verbose=verbose,
                 fig=subfig,  # Pass the subfigure
+                linear_unmix_matrix=linear_unmix_matrix
             )
         except Exception as e:
             print(f"Error plotting round {round_n} for cell {plot_cell_id}: {e}")
@@ -124,6 +128,118 @@ def plot_single_cell_expression_all_rounds(
     return fig
 
 
+import numpy as np
+
+def linear_unmix(
+    image,
+    mix_matrix,
+    axis=-1,
+    method="auto",      # "auto" | "inv" | "pinv" | "nnls"
+    rcond=1e-6,         # used for pinv
+    offsets=None,       # per-observed-channel baseline to subtract
+    clip=True,          # clip negatives to 0 for inv/pinv paths
+    out_dtype=None,     # e.g., np.float32
+):
+    """
+    Unmix multi-channel fluorescence images given a crosstalk (mixing) matrix.
+
+    Model (per pixel): observed = true @ M
+      - image[..., c_obs]
+      - true has C_true channels; usually C_true == C_obs == C
+      - If your lab defines observed = M @ true instead, pass M.T
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Shape (..., C) or (C, ...).
+    mix_matrix : array-like (C_true, C_obs)
+        M in observed = true @ M.
+    axis : int
+        Channel axis in `image`.
+    method : {"auto","inv","pinv","nnls"}
+        * "auto": inv if square & well-conditioned else pinv
+        * "inv":  matrix inverse (square only)
+        * "pinv": Moore–Penrose pseudo-inverse (least squares)
+        * "nnls": Non-Negative Least Squares per pixel (requires SciPy)
+    rcond : float
+        Cutoff for small singular values in pinv.
+    offsets : array-like or None
+        Per-observed-channel baseline to subtract before unmixing (length = C_obs).
+    clip : bool
+        Clip negatives to 0 for inv/pinv paths (ignored for nnls, which returns ≥0).
+    out_dtype : np.dtype or None
+        Output dtype (default float32).
+
+    Returns
+    -------
+    unmixed : np.ndarray
+        Same shape as `image`, unmixed channels on `axis`.
+    """
+    img = np.asarray(image)
+    M = np.asarray(mix_matrix, dtype=np.float64)
+    img_ch_last = np.moveaxis(img, axis, -1).astype(np.float64, copy=False)
+
+    # Sanity checks
+    C_obs = img_ch_last.shape[-1]
+    if M.shape[1] != C_obs:
+        raise ValueError(f"mix_matrix second dimension ({M.shape[1]}) must equal observed channels ({C_obs}).")
+
+    # Optional baseline subtraction on observed channels
+    if offsets is not None:
+        offsets = np.asarray(offsets, dtype=np.float64)
+        if offsets.shape[0] != C_obs:
+            raise ValueError("`offsets` must have length equal to observed channels.")
+        img_ch_last = img_ch_last - offsets
+
+    # Prepare observed as (N_pixels, C_obs)
+    leading_shape = img_ch_last.shape[:-1]
+    O = img_ch_last.reshape(-1, C_obs)
+
+    if method.lower() == "nnls":
+        # Solve: min || A x - b ||^2 s.t. x>=0, where A = M^T, x = true^T, b = observed^T
+        try:
+            from scipy.optimize import nnls
+        except Exception as e:
+            raise ImportError(
+                "method='nnls' requires SciPy (scipy.optimize.nnls). "
+                "Install scipy or use method='pinv'/'auto'."
+            ) from e
+
+        A = M.T  # shape (C_obs, C_true)
+        C_true = M.shape[0]
+        T = np.empty((O.shape[0], C_true), dtype=np.float64)
+        # Simple per-pixel loop; for speed on huge images, consider batching/parallelism
+        for i in range(O.shape[0]):
+            T[i], _ = nnls(A, O[i])
+    else:
+        # Compute unmixing matrix U such that true = observed @ U
+        # We have observed (N x C_obs), want true (N x C_true): U = M^{-1} (if square) or M^{+}
+        use_inv = (method in ("auto", "inv")) and (M.shape[0] == M.shape[1])
+        if use_inv:
+            try:
+                cond = np.linalg.cond(M)
+                if method == "inv" or cond < 1 / rcond:
+                    U = np.linalg.inv(M)
+                else:
+                    U = np.linalg.pinv(M, rcond=rcond)
+            except np.linalg.LinAlgError:
+                U = np.linalg.pinv(M, rcond=rcond)
+        elif method == "pinv" or method == "auto":
+            U = np.linalg.pinv(M, rcond=rcond)
+        else:
+            raise ValueError("Unknown method. Use 'auto', 'inv', 'pinv', or 'nnls'.")
+
+        T = O @ U
+        if clip:
+            np.maximum(T, 0, out=T)
+
+    # Reshape back to image layout
+    if out_dtype is None:
+        out_dtype = np.float32
+    T = T.reshape(*leading_shape, M.shape[0]).astype(out_dtype, copy=False)
+    return np.moveaxis(T, -1, axis)
+
+
 # -------------------------------------------------------------------------------------------------
 # High level drivers
 # -------------------------------------------------------------------------------------------------
@@ -140,6 +256,7 @@ def plot_all_channels_cell(
     trim_to_square=True,
     fig=None,
     verbose=False,
+    linear_unmix_matrix=None,
 ):
     """
     Plot segmentation crops for all channels in an HCRDataset round for a specific cell.
@@ -155,7 +272,8 @@ def plot_all_channels_cell(
     pyramid_level : str
         Pyramid level for zarr data
     vmin_vmax : str or tuple
-        Either "auto" for 5th-95th percentile, or tuple (vmin, vmax) for fixed range
+        Either "auto" for 5th-95th percentile, or tuple (vmin, vmax) for fixed range,
+        or 'blend' which is fixed for all channels, unless its max is above the 99& for that channel, then use that channel's 99%
     plot_mask_outlines : bool
         Whether to overlay segmentation mask outlines
     num_planes : int
@@ -251,6 +369,35 @@ def plot_all_channels_cell(
     if verbose:
         print(f"Successfully loaded {len(channel_arrays)} channels")
 
+    if linear_unmix_matrix is not None:
+        chan_names = list(channel_arrays.keys())
+        img_arrays = list(channel_arrays.values())
+        # if channel =405, remove
+        if "405" in chan_names:
+            idx_405 = chan_names.index("405")
+            chan_names.pop(idx_405)
+            img_arrays.pop(idx_405)
+            print("Removing channel 405 for linear unmixing")
+        img_stack = np.stack(img_arrays, axis=-1)  # shape (Y, X, C)
+        print(f"Applying linear unmixing with matrix shape {linear_unmix_matrix.shape}...")
+        unmixed_stack = linear_unmix(
+            img_stack,
+            linear_unmix_matrix,
+            axis=-1,
+            method="auto",
+            rcond=1e-6,
+            offsets=None,
+            clip=True,
+            out_dtype=np.float32,
+        )
+
+        for i, chan in enumerate(chan_names):
+            channel_arrays[chan] = unmixed_stack[..., i]
+            print(f"  Channel {chan}: unmixed")
+        print("Linear unmixing completed.")
+    # -------------------------------------------------------------------------------------------------
+
+
     # Calculate figure layout - single row
     n_channels = len(channel_arrays)
     if n_channels == 0:
@@ -294,6 +441,14 @@ def plot_all_channels_cell(
         if vmin_vmax == "auto":
             vmin = np.percentile(chan_data, 5)
             vmax = np.percentile(chan_data, 99.9)
+        elif vmin_vmax == "blend":
+            # fixed at 90
+            vmin = 90
+            vmax_99 = np.percentile(chan_data, 99.95)
+            if vmax_99 > 600:
+                vmax = vmax_99
+            else:
+                vmax = 600
         elif isinstance(vmin_vmax, (tuple, list)) and len(vmin_vmax) == 2:
             vmin, vmax = vmin_vmax
         else:
