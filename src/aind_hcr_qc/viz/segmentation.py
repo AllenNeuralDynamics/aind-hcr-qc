@@ -195,6 +195,7 @@ def plot_centroids(
     n_samples=None,
     color_col=None,
     cmap="Blues",
+    size=4,
     clip_range=(None, None),
     xlims=(None, None),
     ylims=(None, None),
@@ -248,12 +249,12 @@ def plot_centroids(
 
     # use color col to set colorbar of scatter values
     if color_col is not None:
-        scatter = ax.scatter(df[x_coord], df[y_coord], alpha=0.5, c=df[color_col], cmap=cmap, s=4)
+        scatter = ax.scatter(df[x_coord], df[y_coord], alpha=0.5, c=df[color_col], cmap=cmap, s=size)
         # Add colorbar
         cbar = fig.colorbar(scatter, ax=ax)
         cbar.set_label(color_col, rotation=270, labelpad=15)
     else:
-        ax.scatter(df[x_coord], df[y_coord], alpha=0.3, s=1)
+        ax.scatter(df[x_coord], df[y_coord], alpha=0.3, s=size)
     if xlims[0] is not None or xlims[1] is not None:
         ax.set_xlim(xlims[0], xlims[1])
     else:
