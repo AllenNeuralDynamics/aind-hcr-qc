@@ -11,6 +11,9 @@ import seaborn as sns
 from aind_hcr_qc.utils import utils
 
 from aind_hcr_qc.utils.utils import saveable_plot
+import aind_hcr_qc.viz.segmentation as seg
+# import constants
+import aind_hcr_qc.constants as constants
 
 # ------------------------------------------------------------------------------------
 # Utils
@@ -1430,7 +1433,7 @@ def plot_spot_metric_dist(spots_df, channel_color_map=None, r_thresh=0.5, dist_t
 # Batch figure drivers
 # ------------------------------------------------------------------------------------------------
 
-def batch_plot_dye_lines(ds, rounds_list, color_map, base_dir):
+def batch_plot_dye_lines(ds, rounds_list, base_dir):
     """
     Plot pairwise dye lines for multiple rounds of a dataset.
 
@@ -1440,8 +1443,6 @@ def batch_plot_dye_lines(ds, rounds_list, color_map, base_dir):
         The HCR dataset object.
     rounds_list : list of str
         List of round keys to process.
-    color_map : dict
-        Dictionary mapping dye labels to colors.
     base_dir : Path
         Base directory to save the plots.
     """
@@ -1475,9 +1476,9 @@ def batch_plot_dye_lines(ds, rounds_list, color_map, base_dir):
         for plot_spots in [True, False]:
             filename = f"{mouse_id}_{round_key}_pairwise_dye_lines_spots={plot_spots}"
             print(f"Plotting round {round_key}, plot_spots={plot_spots}")
-            viz.plot_dye_lines_pairwise(
+            plot_dye_lines_pairwise(
                 intensity_array, channels, ratios,
-                detected_channels, color_map=color_map,
+                detected_channels, color_map=constants.CHAN_CMAP_SOFT,
                 dye_to_label=dye_to_label,
                 sample_per_channel=10000,
                 plot_only_pair_dyes=True,
