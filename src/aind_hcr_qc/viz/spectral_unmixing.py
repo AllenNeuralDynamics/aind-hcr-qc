@@ -10,6 +10,8 @@ import seaborn as sns
 
 from aind_hcr_qc.utils import utils
 
+from aind_hcr_qc.utils.utils import saveable_plot
+
 # ------------------------------------------------------------------------------------
 # Utils
 # ------------------------------------------------------------------------------------
@@ -1140,6 +1142,206 @@ def plot_filtered_intensities(
     return fig
 
 
+# ---- Dye line/Spot intensities improvement ----
+
+def _unit_columns(M: np.ndarray) -> np.ndarray:
+    M = np.asarray(M, dtype=float)
+    col_norms = np.linalg.norm(M, axis=0) + 1e-12
+    return M / col_norms
+
+@saveable_plot()
+def plot_dye_lines_pairwise(
+    intensity_data: np.ndarray,
+    channel_names: list,
+    learned_matrix: np.ndarray,
+    detection_channels: np.ndarray = None,
+    color_map: dict = None,
+    dye_to_label: dict = None,
+    plot_only_pair_dyes: bool = False,
+    plot_dye_lines: bool = True,
+    plot_spots: bool = True,
+    sample_per_channel: int = 5000,
+    p_radius: float = 99.0,
+    figsize: tuple = (10, 10),
+    alpha_points: float = 0.15,
+    s_points: float = 3.0,
+    xlim: tuple = None,
+    ylim: tuple = None,
+    title: str = "Pairwise projections (lower-triangular) with learned dye-line directions",
+):
+    """
+    Lower-triangular matrix of pairwise plots:
+      panel (i, j) shows channel i (y) vs channel j (x) for i > j.
+    Leftmost column has y labels; bottom row has x labels.
+    
+    Parameters
+    ----------
+    color_map : dict, optional
+        Colors for points (by detection label string) and/or dyes.
+        Example: {"Cy3": "#e41a1c", "TxRed": "#377eb8", 0: "#e41a1c", 1: "#377eb8"}
+        Priority for line color: dye_to_label -> color_map[label] -> color_map[dye_id] -> black.
+    dye_to_label : dict, optional
+        Map dye identifier -> detection label (e.g., {0: "Cy3", 1: "TxRed"}).
+    plot_only_pair_dyes : bool
+        If True, only plot dyes whose assigned label matches either axis label of the subplot.
+        Dyes without a mapping are skipped when this is True.
+    plot_dye_lines : bool, default True
+        If True, plot the dye lines. If False, only scatter points are shown.
+    plot_spots : bool, default True
+        If True, plot the scatter points. If False, only dye lines are shown.
+    """
+    sns.set_context("notebook", font_scale=1.2)
+    X = np.asarray(intensity_data, dtype=float)
+    C = X.shape[1]
+    assert C == len(channel_names), "channel_names length must match data width"
+
+    U = _unit_columns(np.asarray(learned_matrix, dtype=float))  # (C, C), columns = dye directions
+
+    # ---- Subsample for plotting ----
+    if detection_channels is not None:
+        detection_channels = np.asarray(detection_channels)
+        plot_idx = []
+        for ch in channel_names:
+            mask = detection_channels == str(ch)
+            ids = np.where(mask)[0]
+            if len(ids) > sample_per_channel:
+                ids = np.random.choice(ids, sample_per_channel, replace=False)
+            plot_idx.append(ids)
+        plot_idx = np.concatenate(plot_idx) if len(plot_idx) else np.arange(len(X))
+        Xp = X[plot_idx]
+        det_plot = detection_channels[plot_idx]
+    else:
+        if len(X) > sample_per_channel * C:
+            plot_idx = np.random.choice(len(X), sample_per_channel * C, replace=False)
+            Xp = X[plot_idx]
+        else:
+            Xp = X
+        det_plot = None
+
+    # ---- Helpers ----
+    def _dye_label(d):
+        """Resolve the assigned detection label for dye d (int or str)."""
+        if dye_to_label is None:
+            return None
+        if d in dye_to_label:
+            return dye_to_label[d]
+        ds = str(d)
+        return dye_to_label.get(ds, None)
+
+    def _line_color(d):
+        """Choose color for dye d using dye_to_label -> color_map[label] -> color_map[d] -> black."""
+        if color_map is None:
+            return "black"
+        lbl = _dye_label(d)
+        if isinstance(lbl, str) and lbl in color_map:
+            return color_map[lbl]
+        if d in color_map:
+            return color_map[d]
+        ds = str(d)
+        return color_map.get(ds, "black")
+
+    def _point_color(lbl):
+        """Color for a detection label string."""
+        if color_map is None:
+            return "gray"
+        return color_map.get(lbl, "gray")
+
+    def _should_plot_dye_in_pair(d, i, j):
+        """Return True if dye d should be drawn in subplot (i,j)."""
+        if not plot_only_pair_dyes:
+            return True
+        lbl = _dye_label(d)
+        if lbl is None:
+            return False  # skip unmapped dyes in this mode
+        return (lbl == str(channel_names[i])) or (lbl == str(channel_names[j]))
+
+    # ---- Create compact figure with only lower triangular subplots ----
+    # Adjust figure size to be more compact
+    compact_figsize = (figsize[0] * 0.8, figsize[1] * 0.8)
+    fig, axes = plt.subplots(C, C, figsize=compact_figsize)
+    if C == 1:
+        axes = np.array([[axes]])
+    
+    # Adjust spacing for compact layout
+    plt.subplots_adjust(hspace=0.1, wspace=0.1, left=0.08, right=0.95, 
+                       top=0.92, bottom=0.12)
+    
+    # Only use lower triangular subplots
+    for i in range(C):
+        for j in range(C):
+            if i <= j:  # hide upper triangle and diagonal
+                axes[i, j].axis("off")
+            else:  # only lower triangle
+                ax = axes[i, j]
+                
+                xi, xj = Xp[:, j], Xp[:, i]  # x: channel j, y: channel i
+
+                # Scatter points (only if plot_spots is True)
+                if plot_spots:
+                    if det_plot is not None:
+                        ax.scatter(xi, xj, c=[_point_color(lbl) for lbl in det_plot],
+                                   s=s_points, alpha=alpha_points)
+                    else:
+                        ax.scatter(xi, xj, s=s_points, alpha=alpha_points, color="gray")
+
+                # Limits and length scale
+                if xlim is not None and ylim is not None:
+                    ax.set_xlim(xlim)
+                    ax.set_ylim(ylim)
+                    Lx = max(abs(xlim[0]), abs(xlim[1]))
+                    Ly = max(abs(ylim[0]), abs(ylim[1]))
+                    L = max(Lx, Ly, 1e-9)
+                else:
+                    r_x = np.percentile(np.abs(xi), p_radius)
+                    r_y = np.percentile(np.abs(xj), p_radius)
+                    L = max(r_x, r_y, 1e-9)
+
+                # Draw dye lines (only if plot_dye_lines is True)
+                if plot_dye_lines:
+                    for d in range(C):
+                        if not _should_plot_dye_in_pair(d, i, j):
+                            continue
+                        v = U[:, d]
+                        v2 = np.array([v[j], v[i]])
+                        norm2 = np.linalg.norm(v2) + 1e-12
+                        p = (L / norm2) * v2
+                        lc = _line_color(d)
+                        # label: prefer assigned label; fallback to "Dye k"
+                        label_text = _dye_label(d) or f"Dye {d+1}"
+                        ax.plot([0, p[0]], [0, p[1]], linewidth=2, color=lc)
+                        ax.text(p[0]*1.05, p[1]*1.05, label_text, color=lc, fontsize=8)
+
+                # Grid and sparse labels
+                ax.grid(True, alpha=0.2)
+                if j == 0:
+                    ax.set_ylabel(channel_names[i])
+                else:
+                    ax.tick_params(axis='y', labelleft=False)
+                if i == C - 1:
+                    ax.set_xlabel(channel_names[j])
+                else:
+                    ax.tick_params(axis='x', labelbottom=False)
+
+    # Legend positioned next to the first subplot
+    if detection_channels is not None and color_map:
+        present = set(map(str, det_plot))
+        handles = [
+            plt.Line2D([], [], marker='o', linestyle='', label=lbl, color=col)
+            for lbl, col in color_map.items()
+            if isinstance(lbl, str) and lbl in present
+        ]
+        if handles:
+            # Position legend next to the first subplot (1,0)
+            first_ax = axes[1, 0]  # First lower triangular subplot
+            legend = first_ax.legend(handles=handles, title="Mixed", 
+                                   bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False)
+
+    # Title closer to subplots
+    #fig.suptitle(title, y=0.95, fontsize=12, wrap=True)
+
+    return fig
+
+
 # ------------------------------------------------------------------------------------------------
 # Spotiness QC (r, dist, etc)
 # ------------------------------------------------------------------------------------------------
@@ -1224,6 +1426,76 @@ def plot_spot_metric_dist(spots_df, channel_color_map=None, r_thresh=0.5, dist_t
 
     return fig
 
+# ------------------------------------------------------------------------------------------------
+# Batch figure drivers
+# ------------------------------------------------------------------------------------------------
+
+def batch_plot_dye_lines(ds, rounds_list, color_map, base_dir):
+    """
+    Plot pairwise dye lines for multiple rounds of a dataset.
+
+    Parameters:
+    ----------
+    ds : HCRDataset
+        The HCR dataset object.
+    rounds_list : list of str
+        List of round keys to process.
+    color_map : dict
+        Dictionary mapping dye labels to colors.
+    base_dir : Path
+        Base directory to save the plots.
+    """
+    base_dir = Path(base_dir)
+
+    for round_key in rounds_list:
+        mouse_id = ds.mouse_id
+        output_dir = base_dir / f"{mouse_id}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        mouse_name = ds.metadata.get("nickname", ds.mouse_id)
+
+        # get filtered spots
+        cell_info = ds.rounds[round_key].get_cell_info(source="mixed_cxg")
+        filt_cell_info = seg.filter_cell_info(cell_info)
+        filt_cell_ids = filt_cell_info.cell_id.unique().tolist()
+        spots_df = ds.rounds[round_key].load_spots(table_type="mixed", filter_cell_ids=filt_cell_ids)
+
+        # make array of intensities
+        intensity_cols = [col for col in spots_df.columns if col.endswith('intensity')]
+        intensity_array = spots_df[intensity_cols].to_numpy()
+        print(f"Intensity array shape: {intensity_array.shape}")
+
+        # labels
+        pm = ds.rounds[round_key].processing_manifest
+        channels = pm["spot_channels"]
+        dye_to_label = {0: '488', 1: '514', 2: '561', 3: '594', 4: '638'}
+
+        ratios = read_ratios_file(ds.rounds[round_key].spot_files.ratios_file)
+        detected_channels = spots_df["chan"].values
+
+        for plot_spots in [True, False]:
+            filename = f"{mouse_id}_{round_key}_pairwise_dye_lines_spots={plot_spots}"
+            print(f"Plotting round {round_key}, plot_spots={plot_spots}")
+            viz.plot_dye_lines_pairwise(
+                intensity_array, channels, ratios,
+                detected_channels, color_map=color_map,
+                dye_to_label=dye_to_label,
+                sample_per_channel=10000,
+                plot_only_pair_dyes=True,
+                plot_dye_lines=True,
+                plot_spots=plot_spots,
+                xlim=(0, 1500), ylim=(0, 1500),
+                figsize=(15, 15),
+                alpha_points=0.5,
+                # @saveable_plot() params
+                save=True,
+                output_dir=output_dir,
+                filename=filename,
+                show=False
+            )
+
+# ------------------------------------------------------------------------------------------------
+# Spectral unmixing QC
+# ------------------------------------------------------------------------------------------------
 
 def qc_spectral_unmixing(data_dir, output_dir, channels=None, verbose=False):
     """

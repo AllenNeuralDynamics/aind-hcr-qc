@@ -3,6 +3,7 @@
 Plotting functions for visualizing single cell expression data across multiple HCR rounds.
 """
 from typing import List
+import numpy as np
 
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -127,8 +128,6 @@ def plot_single_cell_expression_all_rounds(
     plt.tight_layout()
     return fig
 
-
-import numpy as np
 
 def linear_unmix(
     image,
