@@ -222,6 +222,9 @@ def plot_centroids(
     if n_samples is not None:
         df = df.sample(n=n_samples, random_state=random_state)
 
+    # map to common centroid name for cols
+    df = df.rename(columns={'centroid_x': 'x_centroid', 'centroid_y': 'y_centroid', 'centroid_z': 'z_centroid'})
+
     # if clip_range is specified, clip the color_col
     if color_col is not None:
         if color_col not in df.columns:
@@ -263,7 +266,7 @@ def plot_centroids(
         ax.set_ylim(ylims[0], ylims[1])
     else:
         ax.set_ylim(df[y_coord].min() - 10, df[y_coord].max() + 10)
-    ax.set_aspect("equal", adjustable="box")
+    #ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel(f"{x_coord}")
     ax.set_ylabel(f"{y_coord}")
     ax.set_title(f"Cell Centroids - {plane} (n={n_samples if n_samples is not None else len(df)})")
@@ -586,6 +589,12 @@ def plot_single_cell_segmentation_overview(
             x_planes,
         )
     return fig
+
+
+
+# ---
+# Main QC function
+# ----
 
 
 def qc_segmentation(
