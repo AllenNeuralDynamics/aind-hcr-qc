@@ -127,7 +127,7 @@ def spot_count_cell_x_gene_coreg(
 # -------------------------------------------------------------------------------------------------
 
 
-def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6)):
+def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None,title=None):
     """
     Plot the cell x gene matrix as an image with inverted colormap.
 
@@ -160,8 +160,8 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
         raise ValueError(f"Gene '{sort_gene}' not found in cell x gene matrix columns.")
     if sort_gene is not None:
         cxg = cxg.sort_values(by=sort_gene, ascending=False)
-
-    fig, ax = plt.subplots(figsize=fig_size)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=fig_size)
 
     ax.imshow(
         cxg,
@@ -178,10 +178,10 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     # add gene names from dataframe
     # plt.yticks(ticks=range(len(cxg.index)), labels=cxg.index)
     ax.set_xticks(ticks=range(len(cxg.columns)), labels=cxg.columns, rotation=90)
-
+    ax.set_title(title)
     # colorbar
 
-    return fig
+    return ax
 
 
 def plot_cell_x_gene_clustered(
