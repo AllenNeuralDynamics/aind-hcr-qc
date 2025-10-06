@@ -192,6 +192,7 @@ def plot_cell_x_gene_clustered(
     k=3,
     add_cluster_labels=True,
     cbar_label="Gene Expression Count",
+    title=None,
     ax=None
 ):
     """
@@ -302,6 +303,9 @@ def plot_cell_x_gene_clustered(
                 verticalalignment="center",
                 horizontalalignment="right",
             )
+
+    if title is not None:
+        ax.set_title(title)
 
     return fig, cluster_labels, sorted_cell_ids
 

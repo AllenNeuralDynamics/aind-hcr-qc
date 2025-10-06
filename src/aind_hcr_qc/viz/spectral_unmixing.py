@@ -1067,7 +1067,7 @@ def plot_pairwise_intensities_multi_ratios(
 
     return [fig]
 
-
+@saveable_plot()
 def plot_filtered_intensities(
     plot_df,
     plot_cell_ids=None,
@@ -1076,9 +1076,7 @@ def plot_filtered_intensities(
     xlims = None,
     ylims = None,
     title = None,
-    filters=None,
-    save=False,
-    save_dir=Path("../scratch"),
+    filters=None
 ):
     """
     Plot pairwise intensities with filters for spots data.
@@ -1094,8 +1092,6 @@ def plot_filtered_intensities(
         plot_cell_ids (list, optional): List of cell IDs to plot. Defaults to range(1,20000)
         channel_label (str, optional): Column name for channel labels. Defaults to "unmixed_chan"
         filters (dict, optional): Dictionary of filters to apply. Defaults to basic filters
-        save (bool, optional): Whether to save the plot. Defaults to False
-        save_dir (Path, optional): Directory to save the plot. Defaults to Path("../scratch")
 
     Returns:
         list: List containing the figure
@@ -1130,17 +1126,17 @@ def plot_filtered_intensities(
     if legend is not None:
         legend.set_title(f"{channel_label} intensity")
 
-    # Save plot if requested
-    if save:
-        save_dir.mkdir(parents=True, exist_ok=True)
-        filters_str = utils.filter_dict_to_string(filters)
-        # change channel_label, "unmixed_chan" -> unmixed, "chan" -> mixed
-        if channel_label == "unmixed_chan":
-            channel_label = "unmixed"
-        elif channel_label == "chan":
-            channel_label = "mixed"
-        filename = f"{round_n}_pairwise_int_{channel_label}_{filters_str}.png"
-        fig[0].savefig(save_dir / filename)
+    # # Save plot if requested
+    # if save:
+
+    # filters_str = utils.filter_dict_to_string(filters)
+    # # change channel_label, "unmixed_chan" -> unmixed, "chan" -> mixed
+    # if channel_label == "unmixed_chan":
+    #     channel_label = "unmixed"
+    # elif channel_label == "chan":
+    #     channel_label = "mixed"
+    #     filename = f"{round_n}_pairwise_int_{channel_label}_{filters_str}.png"
+    #     fig[0].savefig(save_dir / filename)
 
     return fig
 
