@@ -1344,8 +1344,28 @@ def plot_dye_lines_pairwise(
 # ------------------------------------------------------------------------------------------------
 # Spotiness QC (r, dist, etc)
 # ------------------------------------------------------------------------------------------------
-def plot_spot_metric_dist(spots_df, channel_color_map=None, r_thresh=0.5, dist_thresh=1.0):
-    """Plot distributions of 'r' and 'dist' for each channel."""
+
+@saveable_plot()
+def plot_spot_metric_dist(spots_df, 
+                          channel_color_map=None, 
+                          r_thresh=0.5, 
+                          dist_thresh=1.0,
+                          show_thresholds=True):
+    """Plot distributions of 'r' and 'dist' for each channel.
+    
+    Parameters
+    ----------
+    spots_df : pd.DataFrame
+        DataFrame containing spot data with 'chan', 'r', and 'dist' columns
+    channel_color_map : dict, optional
+        Dictionary mapping channel names to colors
+    r_thresh : float, default 0.5
+        Threshold value for 'r' metric
+    dist_thresh : float, default 1.0
+        Threshold value for 'dist' metric
+    show_thresholds : bool, default True
+        If True, show threshold lines, shading, and statistics text
+    """
     channels = spots_df["chan"].unique()
     n_channels = len(channels)
 
@@ -1360,31 +1380,33 @@ def plot_spot_metric_dist(spots_df, channel_color_map=None, r_thresh=0.5, dist_t
 
         # Plot 'r' distribution
         axs[i, 0].hist(chan_data["r"], bins=100, color=channel_color_map[chan], alpha=0.7)
-        axs[i, 0].set_title(f"{chan} - r Distribution", fontsize=16)
+        axs[i, 0].set_title(f"{chan} - r", fontsize=16)
         axs[i, 0].set_xlabel("r (corr)", fontsize=14)
         axs[i, 0].set_ylabel("Frequency", fontsize=14)
         axs[i, 0].grid(True, alpha=0.3)
 
         # Plot 'dist' distribution
         axs[i, 1].hist(chan_data["dist"], bins=100, color=channel_color_map[chan], alpha=0.7)
-        axs[i, 1].set_title(f"{chan} - dist Distribution", fontsize=16)
+        axs[i, 1].set_title(f"{chan} - dist", fontsize=16)
         axs[i, 1].set_xlabel("dist", fontsize=14)
         axs[i, 1].set_ylabel("Frequency", fontsize=14)
         axs[i, 1].grid(True, alpha=0.3)
 
-        # add vertical lines for thresholds
-        axs[i, 0].axvline(r_thresh, color="red", linestyle="--", label="r threshold", alpha=0.5)
-        axs[i, 1].axvline(dist_thresh, color="red", linestyle="--", label="dist threshold", alpha=0.5)
+        if show_thresholds:
+            # add vertical lines for thresholds
+            axs[i, 0].axvline(r_thresh, color="red", linestyle="--", label="r threshold", alpha=0.5)
+            axs[i, 1].axvline(dist_thresh, color="red", linestyle="--", label="dist threshold", alpha=0.2)
 
-        # add legends to to right
-        axs[i, 0].legend(loc="lower right")
-        axs[i, 1].legend(loc="lower right")
+            # add legends to to right
+            axs[i, 0].legend(loc="lower right")
+            axs[i, 1].legend(loc="lower right")
 
-        # for r dist, add shaded area for r < r_thresh
-        axs[i, 0].fill_betweenx(axs[i, 0].get_ylim(), 0, r_thresh, color="grey", alpha=0.1)
+            # for r dist, add shaded area for r < r_thresh
+            axs[i, 0].fill_betweenx(axs[i, 0].get_ylim(), 0, r_thresh, color="grey", alpha=0.3)
 
-        # for dist dist, add shaded area for dist > dist_thresh
-        axs[i, 1].fill_betweenx(axs[i, 1].get_ylim(), dist_thresh, axs[i, 1].get_xlim()[1], color="grey", alpha=0.1)
+            # for dist dist, add shaded area for dist > dist_thresh
+            axs[i, 1].fill_betweenx(axs[i, 1].get_ylim(), dist_thresh, axs[i, 1].get_xlim()[1], color="grey", alpha=0.2)
+
         # axs[i, 0].set_xlim(0, max(chan_data['r'].max(), r_thresh * 1.1))
         # set r 0 to 1
         axs[i, 0].set_xlim(0, 1)
@@ -1394,31 +1416,32 @@ def plot_spot_metric_dist(spots_df, channel_color_map=None, r_thresh=0.5, dist_t
         axs[i, 0].set_ylim(0, axs[i, 0].get_ylim()[1])
         axs[i, 1].set_ylim(0, axs[i, 1].get_ylim()[1])
 
-        # calc number of spots below r_thresh and above dist_thresh
-        n_below_r_thresh = chan_data[chan_data["r"] < r_thresh].shape[0]
-        n_above_dist_thresh = chan_data[chan_data["dist"] > dist_thresh].shape[0]
-        total_spots = chan_data.shape[0]
+        if show_thresholds:
+            # calc number of spots below r_thresh and above dist_thresh
+            n_below_r_thresh = chan_data[chan_data["r"] < r_thresh].shape[0]
+            n_above_dist_thresh = chan_data[chan_data["dist"] > dist_thresh].shape[0]
+            total_spots = chan_data.shape[0]
 
-        percent_below_r_thresh = (n_below_r_thresh / total_spots) * 100 if total_spots > 0 else 0
-        percent_above_dist_thresh = (n_above_dist_thresh / total_spots) * 100 if total_spots > 0 else 0
+            percent_below_r_thresh = (n_below_r_thresh / total_spots) * 100 if total_spots > 0 else 0
+            percent_above_dist_thresh = (n_above_dist_thresh / total_spots) * 100 if total_spots > 0 else 0
 
-        # add to legends
-        axs[i, 0].text(
-            0.05,
-            0.95,
-            f"Below r < {r_thresh}: {n_below_r_thresh} ({percent_below_r_thresh:.2f}%)",
-            transform=axs[i, 0].transAxes,
-            fontsize=12,
-            verticalalignment="top",
-        )
-        axs[i, 1].text(
-            0.05,
-            0.95,
-            f"Above dist > {dist_thresh}: {n_above_dist_thresh} ({percent_above_dist_thresh:.2f}%)",
-            transform=axs[i, 1].transAxes,
-            fontsize=12,
-            verticalalignment="top",
-        )
+            # add to legends
+            axs[i, 0].text(
+                0.05,
+                0.95,
+                f"< r {r_thresh}: {n_below_r_thresh} ({percent_below_r_thresh:.2f}%)",
+                transform=axs[i, 0].transAxes,
+                fontsize=10,
+                verticalalignment="top",
+            )
+            axs[i, 1].text(
+                0.05,
+                0.95,
+                f"> dist {dist_thresh}: {n_above_dist_thresh} ({percent_above_dist_thresh:.2f}%)",
+                transform=axs[i, 1].transAxes,
+                fontsize=10,
+                verticalalignment="top",
+            )
 
     plt.tight_layout()
     plt.subplots_adjust(hspace=0.4, wspace=0.3)

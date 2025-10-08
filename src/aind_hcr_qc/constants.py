@@ -1,7 +1,7 @@
 # constants.py
 
 # more vibrant channel colors
-CHANNEL_COLORS = {
+Z1_CHANNEL_CMAP_VIBRANT = {
     "405": "#9E9E9E",  # Grey
     "488": "#4CAF50",  # Soft green
     "514": "#F44336",  # Vibrant red
@@ -11,7 +11,7 @@ CHANNEL_COLORS = {
 }
 
 # pleasant and soft channel colors
-CHAN_CMAP_SOFT = {
+Z1_CHANNEL_CMAP_SOFT = {
     '405': '#A9A9A9',   # darkgrey
     '488': '#3CB373',   # mediumseagreen
     '514': '#FF6347',   # tomato
