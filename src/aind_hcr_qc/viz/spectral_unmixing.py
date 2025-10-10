@@ -403,6 +403,275 @@ def print_volume_filtering__summary(cxg):
     print(comp_df.to_string(index=False, float_format="%.1f"))
 
 
+# ----------------------------------------------------------------------------------------
+# Spot Intensity
+# ----------------------------------------------------------------------------------------
+
+@saveable_plot()
+def plot_channel_intensity_histograms(
+    spots_df,
+    channel_col='chan',
+    cmap=None,
+    bins=50,
+    density=True,
+    xlim=None,
+    figsize=None,
+    title_prefix="",
+    log_scale=False,  # NEW parameter
+    save=False,
+    filename=None,
+    output_dir=None
+):
+    """
+    Plot normalized density histograms of spot intensities per channel.
+    
+    Parameters
+    ----------
+    ...existing params...
+    log_scale : bool
+        If True, plot log10(intensity + 1) instead of raw intensity
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    if cmap is None:
+        cmap = constants.Z1_CHANNEL_CMAP_SOFT
+    
+    is_unmixed = channel_col == 'unmixed_chan'
+    gene_col = 'unmixed_gene' if is_unmixed else 'mixed_gene'
+    chan_type = "Unmixed" if is_unmixed else "Mixed"
+    
+    channels = sorted(spots_df[channel_col].dropna().unique())
+    n_channels = len(channels)
+    
+    if figsize is None:
+        figsize = (12, 3 * ((n_channels + 2) // 3))
+    
+    ncols = 3
+    nrows = (n_channels + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    axes = axes.flatten()
+    
+    # Compute global xlim if not provided
+    if xlim is None:
+        all_intensities = []
+        for chan in channels:
+            intensity_col = f'chan_{chan}_intensity'
+            if intensity_col in spots_df.columns:
+                vals = spots_df[intensity_col].dropna().values
+                if log_scale:
+                    vals = np.log10(vals + 1)
+                all_intensities.extend(vals)
+        if all_intensities:
+            xlim = (
+                np.percentile(all_intensities, 0.1),
+                np.percentile(all_intensities, 99.9)
+            )
+        else:
+            xlim = (0, 3) if log_scale else (0, 1000)
+    
+    # Plot each channel
+    for idx, chan in enumerate(channels):
+        ax = axes[idx]
+        intensity_col = f'chan_{chan}_intensity'
+        
+        if intensity_col not in spots_df.columns:
+            ax.text(0.5, 0.5, f'No data for {chan}', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(f'Channel {chan}')
+            continue
+        
+        chan_mask = spots_df[channel_col] == chan
+        intensities = spots_df.loc[chan_mask, intensity_col].dropna()
+        
+        # Apply log transform if requested
+        if log_scale:
+            intensities = np.log10(intensities + 1)
+        
+        gene_names = spots_df.loc[chan_mask, gene_col].dropna().unique()
+        gene_label = gene_names[0] if len(gene_names) > 0 else "Unknown"
+        color = cmap.get(str(chan), '#888888')
+        
+        # Plot histogram
+        ax.hist(intensities, bins=bins, density=density, 
+               color=color, alpha=0.7, edgecolor='black', linewidth=0.5)
+        
+        # Styling
+        ax.set_xlim(xlim)
+        xlabel = 'log₁₀(Intensity + 1)' if log_scale else 'Intensity'
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel('Density' if density else 'Count')
+        ax.set_title(f'{gene_label}\nChannel {chan}', color=color, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        
+        # Add stats text (using original scale)
+        orig_intensities = spots_df.loc[chan_mask, intensity_col].dropna()
+        median_int = orig_intensities.median()
+        mean_int = orig_intensities.mean()
+        n_spots = len(orig_intensities)
+        stats_text = f'n={n_spots:,}\nμ={mean_int:.1f}\nmed={median_int:.1f}'
+        ax.text(0.95, 0.95, stats_text,
+               transform=ax.transAxes, fontsize=8,
+               verticalalignment='top', horizontalalignment='right',
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+    
+    # Hide unused subplots
+    for idx in range(n_channels, len(axes)):
+        axes[idx].axis('off')
+    
+    title = f'{title_prefix}{chan_type} Channel Intensity Distributions'
+    if log_scale:
+        title += ' (Log Scale)'
+    fig.suptitle(title.strip(), fontsize=14, fontweight='bold')
+    
+    plt.tight_layout()
+    return fig
+
+@saveable_plot()
+def plot_channel_intensity_histograms_by_round(
+    spots_df,
+    channel_col='chan',
+    round_col='round',
+    channels_to_plot=None,
+    cmap=None,
+    bins=50,
+    density=True,
+    xlim=None,
+    figsize=None,
+    title_prefix="",
+    log_scale=False,
+):
+    """
+    Plot normalized density histograms of spot intensities per channel,
+    with each round as a separate row of subplots.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    if cmap is None:
+        cmap = constants.Z1_CHANNEL_CMAP_SOFT
+    
+    is_unmixed = channel_col == 'unmixed_chan'
+    gene_col = 'unmixed_gene' if is_unmixed else 'mixed_gene'
+    chan_type = "Unmixed" if is_unmixed else "Mixed"
+    
+    rounds = sorted(spots_df[round_col].dropna().unique())
+    if channels_to_plot is None:
+        channels = sorted(spots_df[channel_col].dropna().unique())
+    else:
+        channels = channels_to_plot
+    
+    n_rounds = len(rounds)
+    n_channels = len(channels)
+    
+    if figsize is None:
+        figsize = (4 * n_channels, 3 * n_rounds)
+    
+    fig, axes = plt.subplots(n_rounds, n_channels, figsize=figsize, squeeze=False)
+    
+    # Compute global xlim if not provided
+    if xlim is None:
+        all_intensities = []
+        for chan in channels:
+            intensity_col = f'chan_{chan}_intensity'
+            if intensity_col in spots_df.columns:
+                vals = spots_df[intensity_col].dropna().values
+                if log_scale:
+                    vals = np.log10(vals + 1)
+                all_intensities.extend(vals)
+        if all_intensities:
+            xlim = (
+                np.percentile(all_intensities, 0.1),
+                np.percentile(all_intensities, 99.9)
+            )
+        else:
+            xlim = (0, 3) if log_scale else (0, 1000)
+    
+    # Plot each round x channel combination
+    for row_idx, round_key in enumerate(rounds):
+        round_mask = spots_df[round_col] == round_key
+        round_df = spots_df[round_mask]
+        
+        for col_idx, chan in enumerate(channels):
+            ax = axes[row_idx, col_idx]
+            intensity_col = f'chan_{chan}_intensity'
+            
+            if intensity_col not in spots_df.columns:
+                ax.text(0.5, 0.5, f'No data', 
+                       ha='center', va='center', transform=ax.transAxes)
+                if row_idx == 0:
+                    ax.set_title(f'Channel {chan}')
+                if col_idx == 0:
+                    ylabel = 'Density' if density else 'Count'
+                    ax.set_ylabel(f'{round_key}\n{ylabel}')
+                continue
+            
+            # Get data for this channel in this round
+            chan_mask = round_df[channel_col] == chan
+            intensities = round_df.loc[chan_mask, intensity_col].dropna()
+            
+            # Apply log transform if requested
+            if log_scale:
+                intensities = np.log10(intensities + 1)
+            
+            # Get gene name if available
+            gene_names = round_df.loc[chan_mask, gene_col].dropna().unique()
+            gene_label = gene_names[0] if len(gene_names) > 0 else "Unknown"
+            
+            # Get color
+            color = cmap.get(str(chan), '#888888')
+            
+            # Plot histogram
+            if len(intensities) > 0:
+                ax.hist(intensities, bins=bins, density=density, 
+                       color=color, alpha=0.7, edgecolor='black', linewidth=0.5)
+                
+                # Add stats text (using original scale) - MOVED TO TOP LEFT
+                orig_intensities = round_df.loc[chan_mask, intensity_col].dropna()
+                median_int = orig_intensities.median()
+                mean_int = orig_intensities.mean()
+                n_spots = len(orig_intensities)
+                stats_text = f'n={n_spots:,}\nμ={mean_int:.1f}\nmed={median_int:.1f}'
+                ax.text(0.95, 0.82, stats_text,
+                       transform=ax.transAxes, fontsize=8,
+                       verticalalignment='top', horizontalalignment='right',
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                gene_text = f'{gene_label}'
+                ax.text(0.95, 0.95, gene_text,
+                       transform=ax.transAxes, fontsize=16,
+                       verticalalignment='top', horizontalalignment='right',  # Changed from 'right' to 'left'
+                       #bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                       color=color, fontweight='bold')
+            
+            # Styling
+            ax.set_xlim(xlim)
+            ax.grid(True, alpha=0.3)
+            
+            # Labels
+            if row_idx == 0:
+                ax.set_title(f'Channel {chan}', color=color, fontweight='bold')
+            if row_idx == n_rounds - 1:
+                xlabel = 'log₁₀(Intensity + 1)' if log_scale else 'Intensity'
+                ax.set_xlabel(xlabel)
+            if col_idx == 0:
+                ylabel = 'Density' if density else 'Count'
+                ax.set_ylabel(f'{round_key}\n{ylabel}')
+            
+            # Remove x tick labels except for bottom row
+            if row_idx < n_rounds - 1:
+                ax.set_xticklabels([])
+    
+    # Add overall title
+    title = f'{title_prefix}{chan_type} Channel Intensity Distributions by Round'
+    if log_scale:
+        title += ' (Log Scale)'
+    fig.suptitle(title.strip(), fontsize=16, fontweight='bold', y=0.995)
+    
+    plt.tight_layout()
+    
+    return fig
+
+
 # ------------------------------------------------------------------------------------------------
 # Spot intensity pairwise plots
 # ------------------------------------------------------------------------------------------------
@@ -1348,100 +1617,110 @@ def plot_dye_lines_pairwise(
 @saveable_plot()
 def plot_spot_metric_dist(spots_df, 
                           channel_color_map=None, 
-                          r_thresh=0.5, 
-                          dist_thresh=1.0,
+                          metrics=['r', 'dist'],
+                          metrics_thresholds=None,
                           show_thresholds=True):
-    """Plot distributions of 'r' and 'dist' for each channel.
+    """Plot distributions of spot quality metrics for each channel.
     
     Parameters
     ----------
     spots_df : pd.DataFrame
-        DataFrame containing spot data with 'chan', 'r', and 'dist' columns
+        DataFrame containing spot data with 'chan' and metric columns
     channel_color_map : dict, optional
         Dictionary mapping channel names to colors
-    r_thresh : float, default 0.5
-        Threshold value for 'r' metric
-    dist_thresh : float, default 1.0
-        Threshold value for 'dist' metric
+    metrics : list of str, default ['r', 'dist']
+        List of metric column names to plot
+    metrics_thresholds : dict, optional
+        Dictionary mapping metric names to threshold values.
+        Example: {'r': 0.5, 'dist': 1.0, 'dye_line_dist_ratio': 4}
+        If None, defaults to {'r': 0.5, 'dist': 1.0}
     show_thresholds : bool, default True
         If True, show threshold lines, shading, and statistics text
     """
     channels = spots_df["chan"].unique()
     n_channels = len(channels)
+    n_metrics = len(metrics)
 
     if channel_color_map is None:
         # channel_color_map = get_channel_color_map()
         raise ValueError("channel_color_map must be provided. refactor to constant")
 
-    fig, axs = plt.subplots(nrows=n_channels, ncols=2, figsize=(8, 4 * n_channels), sharex=False, sharey=False)
+    if metrics_thresholds is None:
+        metrics_thresholds = {'r': 0.5, 'dist': 1.0}
+
+    fig, axs = plt.subplots(nrows=n_channels, ncols=n_metrics, figsize=(4 * n_metrics, 4 * n_channels), sharex=False, sharey=False)
+    
+    # Handle single metric case
+    if n_metrics == 1:
+        axs = axs.reshape(-1, 1)
 
     for i, chan in enumerate(channels):
         chan_data = spots_df[spots_df["chan"] == chan]
 
-        # Plot 'r' distribution
-        axs[i, 0].hist(chan_data["r"], bins=100, color=channel_color_map[chan], alpha=0.7)
-        axs[i, 0].set_title(f"{chan} - r", fontsize=16)
-        axs[i, 0].set_xlabel("r (corr)", fontsize=14)
-        axs[i, 0].set_ylabel("Frequency", fontsize=14)
-        axs[i, 0].grid(True, alpha=0.3)
+        for j, metric in enumerate(metrics):
+            # Check if metric exists in dataframe
+            if metric not in chan_data.columns:
+                axs[i, j].text(0.5, 0.5, f"Metric '{metric}' not found", 
+                              ha='center', va='center', transform=axs[i, j].transAxes)
+                axs[i, j].set_title(f"{chan} - {metric}", fontsize=16)
+                continue
 
-        # Plot 'dist' distribution
-        axs[i, 1].hist(chan_data["dist"], bins=100, color=channel_color_map[chan], alpha=0.7)
-        axs[i, 1].set_title(f"{chan} - dist", fontsize=16)
-        axs[i, 1].set_xlabel("dist", fontsize=14)
-        axs[i, 1].set_ylabel("Frequency", fontsize=14)
-        axs[i, 1].grid(True, alpha=0.3)
+            # Plot metric distribution
+            axs[i, j].hist(chan_data[metric], bins=100, color=channel_color_map[chan], alpha=0.7)
+            axs[i, j].set_title(f"{chan} - {metric}", fontsize=16)
+            axs[i, j].set_xlabel(metric, fontsize=14)
+            axs[i, j].set_ylabel("Frequency", fontsize=14)
+            axs[i, j].grid(True, alpha=0.3)
 
-        if show_thresholds:
-            # add vertical lines for thresholds
-            axs[i, 0].axvline(r_thresh, color="red", linestyle="--", label="r threshold", alpha=0.5)
-            axs[i, 1].axvline(dist_thresh, color="red", linestyle="--", label="dist threshold", alpha=0.2)
+            # Apply threshold visualization if metric has a threshold
+            if show_thresholds and metric in metrics_thresholds:
+                thresh = metrics_thresholds[metric]
+                
+                # add vertical line for threshold
+                axs[i, j].axvline(thresh, color="red", linestyle="--", 
+                                 label=f"{metric} threshold", alpha=0.5)
+                axs[i, j].legend(loc="lower right")
 
-            # add legends to to right
-            axs[i, 0].legend(loc="lower right")
-            axs[i, 1].legend(loc="lower right")
+                # Determine shading direction based on metric
+                # For 'r', shade below threshold (bad spots)
+                # For 'dist' and 'dye_line_to_dist', shade above threshold (bad spots)
+                if metric == 'r':
+                    # Shade area below threshold
+                    axs[i, j].fill_betweenx(axs[i, j].get_ylim(), 0, thresh, 
+                                           color="grey", alpha=0.3)
+                    comparison_op = '<'
+                    n_filtered = chan_data[chan_data[metric] < thresh].shape[0]
+                else:
+                    # Shade area above threshold
+                    axs[i, j].fill_betweenx(axs[i, j].get_ylim(), thresh, 
+                                           axs[i, j].get_xlim()[1], color="grey", alpha=0.2)
+                    comparison_op = '>'
+                    n_filtered = chan_data[chan_data[metric] > thresh].shape[0]
 
-            # for r dist, add shaded area for r < r_thresh
-            axs[i, 0].fill_betweenx(axs[i, 0].get_ylim(), 0, r_thresh, color="grey", alpha=0.3)
+                # Set appropriate x-axis limits
+                if metric == 'r':
+                    axs[i, j].set_xlim(0, 1)
+                elif metric == 'dye_line_dist_ratio':
+                    axs[i, j].set_xlim(0, 15)
+                else:
+                    axs[i, j].set_xlim(0, max(chan_data[metric].max(), thresh * 1.1))
 
-            # for dist dist, add shaded area for dist > dist_thresh
-            axs[i, 1].fill_betweenx(axs[i, 1].get_ylim(), dist_thresh, axs[i, 1].get_xlim()[1], color="grey", alpha=0.2)
+                # Adjust ylim to top of shaded area
+                axs[i, j].set_ylim(0, axs[i, j].get_ylim()[1])
 
-        # axs[i, 0].set_xlim(0, max(chan_data['r'].max(), r_thresh * 1.1))
-        # set r 0 to 1
-        axs[i, 0].set_xlim(0, 1)
-        axs[i, 1].set_xlim(0, max(chan_data["dist"].max(), dist_thresh * 1.1))
+                # Calculate and display statistics
+                total_spots = chan_data.shape[0]
+                percent_filtered = (n_filtered / total_spots) * 100 if total_spots > 0 else 0
 
-        # adjust ylime to top of shaded area
-        axs[i, 0].set_ylim(0, axs[i, 0].get_ylim()[1])
-        axs[i, 1].set_ylim(0, axs[i, 1].get_ylim()[1])
-
-        if show_thresholds:
-            # calc number of spots below r_thresh and above dist_thresh
-            n_below_r_thresh = chan_data[chan_data["r"] < r_thresh].shape[0]
-            n_above_dist_thresh = chan_data[chan_data["dist"] > dist_thresh].shape[0]
-            total_spots = chan_data.shape[0]
-
-            percent_below_r_thresh = (n_below_r_thresh / total_spots) * 100 if total_spots > 0 else 0
-            percent_above_dist_thresh = (n_above_dist_thresh / total_spots) * 100 if total_spots > 0 else 0
-
-            # add to legends
-            axs[i, 0].text(
-                0.05,
-                0.95,
-                f"< r {r_thresh}: {n_below_r_thresh} ({percent_below_r_thresh:.2f}%)",
-                transform=axs[i, 0].transAxes,
-                fontsize=10,
-                verticalalignment="top",
-            )
-            axs[i, 1].text(
-                0.05,
-                0.95,
-                f"> dist {dist_thresh}: {n_above_dist_thresh} ({percent_above_dist_thresh:.2f}%)",
-                transform=axs[i, 1].transAxes,
-                fontsize=10,
-                verticalalignment="top",
-            )
+                # Add statistics text
+                axs[i, j].text(
+                    0.05,
+                    0.95,
+                    f"{comparison_op} {metric} {thresh}: {n_filtered} ({percent_filtered:.2f}%)",
+                    transform=axs[i, j].transAxes,
+                    fontsize=10,
+                    verticalalignment="top",
+                )
 
     plt.tight_layout()
     plt.subplots_adjust(hspace=0.4, wspace=0.3)

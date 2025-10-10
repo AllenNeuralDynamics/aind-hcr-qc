@@ -16,7 +16,9 @@ from .segmentation import (
 from .spectral_unmixing import (
     plot_pairwise_intensities_multi_ratios,
     plot_filtered_intensities,
-    plot_dye_lines_pairwise
+    plot_dye_lines_pairwise,
+    plot_channel_intensity_histograms,
+    plot_channel_intensity_histograms_by_round,
 )
 from .tile_alignment import (
     qc_tile_alignment,
@@ -40,7 +42,9 @@ __all__ = [
     # spectral unmixing
     "plot_pairwise_intensities_multi_ratios",
     "plot_filtered_intensities",
-    "plot_dye_lines_pairwise"
+    "plot_dye_lines_pairwise",
+    "plot_channel_intensity_histograms",
+    "plot_channel_intensity_histograms_by_round",
     # cells
     "plot_single_cell_expression_all_rounds",
 ]

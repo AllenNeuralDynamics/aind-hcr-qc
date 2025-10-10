@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import operator
 import re
 
-from aind_hcr_qc.constants import CHANNEL_COLORS
+from aind_hcr_qc.constants import Z1_CHANNEL_CMAP_VIBRANT
 
 # -------------------------------------------------------------------------------------------------
 # Project specific utils
@@ -43,7 +43,7 @@ def get_gene_channel_colors(dataset):
     for round_n in dataset.rounds:
         pm = dataset.rounds[round_n].processing_manifest
         for channel, gene in pm["gene_dict"].items():
-            gene_channel_colors[gene["gene"]] = CHANNEL_COLORS[channel]
+            gene_channel_colors[gene["gene"]] = Z1_CHANNEL_CMAP_VIBRANT[channel]
 
     return gene_channel_colors
 
