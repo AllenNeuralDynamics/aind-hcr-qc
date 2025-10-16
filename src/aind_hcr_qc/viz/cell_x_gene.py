@@ -127,7 +127,7 @@ def spot_count_cell_x_gene_coreg(
 # -------------------------------------------------------------------------------------------------
 
 
-def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6)):
+def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None,title=None):
     """
     Plot the cell x gene matrix as an image with inverted colormap.
 
@@ -160,8 +160,8 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
         raise ValueError(f"Gene '{sort_gene}' not found in cell x gene matrix columns.")
     if sort_gene is not None:
         cxg = cxg.sort_values(by=sort_gene, ascending=False)
-
-    fig, ax = plt.subplots(figsize=fig_size)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=fig_size)
 
     ax.imshow(
         cxg,
@@ -178,10 +178,10 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     # add gene names from dataframe
     # plt.yticks(ticks=range(len(cxg.index)), labels=cxg.index)
     ax.set_xticks(ticks=range(len(cxg.columns)), labels=cxg.columns, rotation=90)
-
+    ax.set_title(title)
     # colorbar
 
-    return fig
+    return ax
 
 
 def plot_cell_x_gene_clustered(
@@ -192,6 +192,8 @@ def plot_cell_x_gene_clustered(
     k=3,
     add_cluster_labels=True,
     cbar_label="Gene Expression Count",
+    title=None,
+    ax=None
 ):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
@@ -258,7 +260,10 @@ def plot_cell_x_gene_clustered(
         # Remove helper columns
         cxg = cxg.drop(["cluster", "total_expression"], axis=1)
 
-    fig, ax = plt.subplots(figsize=fig_size)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=fig_size)
+    else:
+        fig = ax.figure
 
     # Plot the heatmap
     im = ax.imshow(cxg, aspect="auto", cmap="gray_r", interpolation="none")
@@ -298,6 +303,9 @@ def plot_cell_x_gene_clustered(
                 verticalalignment="center",
                 horizontalalignment="right",
             )
+
+    if title is not None:
+        ax.set_title(title)
 
     return fig, cluster_labels, sorted_cell_ids
 
@@ -590,3 +598,6 @@ def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False, output_dir
     #     #plt.show()
 
     return fig
+
+
+

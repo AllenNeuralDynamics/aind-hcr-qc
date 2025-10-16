@@ -10,6 +10,11 @@ import seaborn as sns
 
 from aind_hcr_qc.utils import utils
 
+from aind_hcr_qc.utils.utils import saveable_plot
+import aind_hcr_qc.viz.segmentation as seg
+# import constants
+import aind_hcr_qc.constants as constants
+
 # ------------------------------------------------------------------------------------
 # Utils
 # ------------------------------------------------------------------------------------
@@ -123,7 +128,8 @@ def plot_spot_count(
     fig = plt.figure(figsize=figsize)
 
     # Calculate grid layout (try to make it roughly square)
-    cols = int(np.ceil(np.sqrt(n_genes)))
+    #cols = int(np.ceil(np.sqrt(n_genes)))
+    cols = 3
     rows = int(np.ceil(n_genes / cols))
 
     # Create subplots for each gene
@@ -395,6 +401,275 @@ def print_volume_filtering__summary(cxg):
 
     comp_df = pd.DataFrame(comparison)
     print(comp_df.to_string(index=False, float_format="%.1f"))
+
+
+# ----------------------------------------------------------------------------------------
+# Spot Intensity
+# ----------------------------------------------------------------------------------------
+
+@saveable_plot()
+def plot_channel_intensity_histograms(
+    spots_df,
+    channel_col='chan',
+    cmap=None,
+    bins=50,
+    density=True,
+    xlim=None,
+    figsize=None,
+    title_prefix="",
+    log_scale=False,  # NEW parameter
+    save=False,
+    filename=None,
+    output_dir=None
+):
+    """
+    Plot normalized density histograms of spot intensities per channel.
+    
+    Parameters
+    ----------
+    ...existing params...
+    log_scale : bool
+        If True, plot log10(intensity + 1) instead of raw intensity
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    if cmap is None:
+        cmap = constants.Z1_CHANNEL_CMAP_SOFT
+    
+    is_unmixed = channel_col == 'unmixed_chan'
+    gene_col = 'unmixed_gene' if is_unmixed else 'mixed_gene'
+    chan_type = "Unmixed" if is_unmixed else "Mixed"
+    
+    channels = sorted(spots_df[channel_col].dropna().unique())
+    n_channels = len(channels)
+    
+    if figsize is None:
+        figsize = (12, 3 * ((n_channels + 2) // 3))
+    
+    ncols = 3
+    nrows = (n_channels + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    axes = axes.flatten()
+    
+    # Compute global xlim if not provided
+    if xlim is None:
+        all_intensities = []
+        for chan in channels:
+            intensity_col = f'chan_{chan}_intensity'
+            if intensity_col in spots_df.columns:
+                vals = spots_df[intensity_col].dropna().values
+                if log_scale:
+                    vals = np.log10(vals + 1)
+                all_intensities.extend(vals)
+        if all_intensities:
+            xlim = (
+                np.percentile(all_intensities, 0.1),
+                np.percentile(all_intensities, 99.9)
+            )
+        else:
+            xlim = (0, 3) if log_scale else (0, 1000)
+    
+    # Plot each channel
+    for idx, chan in enumerate(channels):
+        ax = axes[idx]
+        intensity_col = f'chan_{chan}_intensity'
+        
+        if intensity_col not in spots_df.columns:
+            ax.text(0.5, 0.5, f'No data for {chan}', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(f'Channel {chan}')
+            continue
+        
+        chan_mask = spots_df[channel_col] == chan
+        intensities = spots_df.loc[chan_mask, intensity_col].dropna()
+        
+        # Apply log transform if requested
+        if log_scale:
+            intensities = np.log10(intensities + 1)
+        
+        gene_names = spots_df.loc[chan_mask, gene_col].dropna().unique()
+        gene_label = gene_names[0] if len(gene_names) > 0 else "Unknown"
+        color = cmap.get(str(chan), '#888888')
+        
+        # Plot histogram
+        ax.hist(intensities, bins=bins, density=density, 
+               color=color, alpha=0.7, edgecolor='black', linewidth=0.5)
+        
+        # Styling
+        ax.set_xlim(xlim)
+        xlabel = 'log₁₀(Intensity + 1)' if log_scale else 'Intensity'
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel('Density' if density else 'Count')
+        ax.set_title(f'{gene_label}\nChannel {chan}', color=color, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        
+        # Add stats text (using original scale)
+        orig_intensities = spots_df.loc[chan_mask, intensity_col].dropna()
+        median_int = orig_intensities.median()
+        mean_int = orig_intensities.mean()
+        n_spots = len(orig_intensities)
+        stats_text = f'n={n_spots:,}\nμ={mean_int:.1f}\nmed={median_int:.1f}'
+        ax.text(0.95, 0.95, stats_text,
+               transform=ax.transAxes, fontsize=8,
+               verticalalignment='top', horizontalalignment='right',
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+    
+    # Hide unused subplots
+    for idx in range(n_channels, len(axes)):
+        axes[idx].axis('off')
+    
+    title = f'{title_prefix}{chan_type} Channel Intensity Distributions'
+    if log_scale:
+        title += ' (Log Scale)'
+    fig.suptitle(title.strip(), fontsize=14, fontweight='bold')
+    
+    plt.tight_layout()
+    return fig
+
+@saveable_plot()
+def plot_channel_intensity_histograms_by_round(
+    spots_df,
+    channel_col='chan',
+    round_col='round',
+    channels_to_plot=None,
+    cmap=None,
+    bins=50,
+    density=True,
+    xlim=None,
+    figsize=None,
+    title_prefix="",
+    log_scale=False,
+):
+    """
+    Plot normalized density histograms of spot intensities per channel,
+    with each round as a separate row of subplots.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    if cmap is None:
+        cmap = constants.Z1_CHANNEL_CMAP_SOFT
+    
+    is_unmixed = channel_col == 'unmixed_chan'
+    gene_col = 'unmixed_gene' if is_unmixed else 'mixed_gene'
+    chan_type = "Unmixed" if is_unmixed else "Mixed"
+    
+    rounds = sorted(spots_df[round_col].dropna().unique())
+    if channels_to_plot is None:
+        channels = sorted(spots_df[channel_col].dropna().unique())
+    else:
+        channels = channels_to_plot
+    
+    n_rounds = len(rounds)
+    n_channels = len(channels)
+    
+    if figsize is None:
+        figsize = (4 * n_channels, 3 * n_rounds)
+    
+    fig, axes = plt.subplots(n_rounds, n_channels, figsize=figsize, squeeze=False)
+    
+    # Compute global xlim if not provided
+    if xlim is None:
+        all_intensities = []
+        for chan in channels:
+            intensity_col = f'chan_{chan}_intensity'
+            if intensity_col in spots_df.columns:
+                vals = spots_df[intensity_col].dropna().values
+                if log_scale:
+                    vals = np.log10(vals + 1)
+                all_intensities.extend(vals)
+        if all_intensities:
+            xlim = (
+                np.percentile(all_intensities, 0.1),
+                np.percentile(all_intensities, 99.9)
+            )
+        else:
+            xlim = (0, 3) if log_scale else (0, 1000)
+    
+    # Plot each round x channel combination
+    for row_idx, round_key in enumerate(rounds):
+        round_mask = spots_df[round_col] == round_key
+        round_df = spots_df[round_mask]
+        
+        for col_idx, chan in enumerate(channels):
+            ax = axes[row_idx, col_idx]
+            intensity_col = f'chan_{chan}_intensity'
+            
+            if intensity_col not in spots_df.columns:
+                ax.text(0.5, 0.5, f'No data', 
+                       ha='center', va='center', transform=ax.transAxes)
+                if row_idx == 0:
+                    ax.set_title(f'Channel {chan}')
+                if col_idx == 0:
+                    ylabel = 'Density' if density else 'Count'
+                    ax.set_ylabel(f'{round_key}\n{ylabel}')
+                continue
+            
+            # Get data for this channel in this round
+            chan_mask = round_df[channel_col] == chan
+            intensities = round_df.loc[chan_mask, intensity_col].dropna()
+            
+            # Apply log transform if requested
+            if log_scale:
+                intensities = np.log10(intensities + 1)
+            
+            # Get gene name if available
+            gene_names = round_df.loc[chan_mask, gene_col].dropna().unique()
+            gene_label = gene_names[0] if len(gene_names) > 0 else "Unknown"
+            
+            # Get color
+            color = cmap.get(str(chan), '#888888')
+            
+            # Plot histogram
+            if len(intensities) > 0:
+                ax.hist(intensities, bins=bins, density=density, 
+                       color=color, alpha=0.7, edgecolor='black', linewidth=0.5)
+                
+                # Add stats text (using original scale) - MOVED TO TOP LEFT
+                orig_intensities = round_df.loc[chan_mask, intensity_col].dropna()
+                median_int = orig_intensities.median()
+                mean_int = orig_intensities.mean()
+                n_spots = len(orig_intensities)
+                stats_text = f'n={n_spots:,}\nμ={mean_int:.1f}\nmed={median_int:.1f}'
+                ax.text(0.95, 0.82, stats_text,
+                       transform=ax.transAxes, fontsize=8,
+                       verticalalignment='top', horizontalalignment='right',
+                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+                gene_text = f'{gene_label}'
+                ax.text(0.95, 0.95, gene_text,
+                       transform=ax.transAxes, fontsize=16,
+                       verticalalignment='top', horizontalalignment='right',  # Changed from 'right' to 'left'
+                       #bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                       color=color, fontweight='bold')
+            
+            # Styling
+            ax.set_xlim(xlim)
+            ax.grid(True, alpha=0.3)
+            
+            # Labels
+            if row_idx == 0:
+                ax.set_title(f'Channel {chan}', color=color, fontweight='bold')
+            if row_idx == n_rounds - 1:
+                xlabel = 'log₁₀(Intensity + 1)' if log_scale else 'Intensity'
+                ax.set_xlabel(xlabel)
+            if col_idx == 0:
+                ylabel = 'Density' if density else 'Count'
+                ax.set_ylabel(f'{round_key}\n{ylabel}')
+            
+            # Remove x tick labels except for bottom row
+            if row_idx < n_rounds - 1:
+                ax.set_xticklabels([])
+    
+    # Add overall title
+    title = f'{title_prefix}{chan_type} Channel Intensity Distributions by Round'
+    if log_scale:
+        title += ' (Log Scale)'
+    fig.suptitle(title.strip(), fontsize=16, fontweight='bold', y=0.995)
+    
+    plt.tight_layout()
+    
+    return fig
 
 
 # ------------------------------------------------------------------------------------------------
@@ -740,7 +1015,7 @@ def plot_dye_lines(ax, chan1_name, chan2_name, ratios_norm, scale="log", colors=
 
 
 def plot_pairwise_intensities_multi_ratios(
-    df, cell_ids, scale="log", chan_col="unmixed_chan", title_prefix=None, same_limits=False, ratios=None
+    df, cell_ids, scale="log", chan_col="unmixed_chan", title_prefix=None, same_limits=False, x_lims = None, y_lims = None, ratios=None
 ):
     """
     Creates 2D scatter plots comparing channel intensities pairwise for multiple cells.
@@ -798,7 +1073,7 @@ def plot_pairwise_intensities_multi_ratios(
     nrows = num_channels - 1  # Number of rows needed for lower triangle
     ncols = num_channels - 1  # Maximum number of columns per row
 
-    fig = plt.figure(figsize=(4 * ncols, 4 * nrows))
+    fig = plt.figure(figsize=(3 * ncols, 3 * nrows))
 
     # Create a grid layout for our triangular plot arrangement
     grid = plt.GridSpec(nrows, ncols, figure=fig)
@@ -912,14 +1187,20 @@ def plot_pairwise_intensities_multi_ratios(
                         x,
                         y,
                         c=channel_colors.get(unmixed_chan, "gray"),
-                        alpha=0.02,  # Lower alpha for dense plots
-                        s=0.1,
+                        alpha=0.08,  # Lower alpha for dense plots
+                        s=0.3,
                     )  # Smaller points for combined view
 
             # Set axis labels
-            ax.set_xlabel(f"{chan2} Intensity ({scale} scale)")
-            ax.set_ylabel(f"{chan1} Intensity ({scale} scale)")
-            ax.set_title(f"{chan1} vs {chan2}")
+            #ax.set_xlabel(f"{chan2} Intensity ({scale} scale)")
+            #ax.set_ylabel(f"{chan1} Intensity ({scale} scale)")
+            #ax.set_title(f"{chan1} vs {chan2}")
+
+            # ONLY ADD X LABEL TO BOTTOM ROW AND Y LABEL TO LEFT COLUMN
+            if row == nrows - 1:  # Last row
+                ax.set_xlabel(f"{chan2}", fontsize=22)
+            if col == 0:  # First column
+                ax.set_ylabel(f"{chan1}", fontsize=22)
 
             # Remove individual legends from the subplots
             # Don't add legend here - we'll add a global one at the end
@@ -941,8 +1222,8 @@ def plot_pairwise_intensities_multi_ratios(
                         ax.set_ylim(0, max_val)
                     else:
                         # Use percentile-based limits for linear scale as in your example
-                        x_lim = np.percentile(x_all, 99.99) if len(x_all) > 0 else 1
-                        y_lim = np.percentile(y_all, 99.99) if len(y_all) > 0 else 1
+                        x_lim = np.percentile(x_all, 99.) if len(x_all) > 0 else 1
+                        y_lim = np.percentile(y_all, 99.) if len(y_all) > 0 else 1
                         if y_lim > 10000:
                             y_lim = 10000
                         if x_lim > 10000:
@@ -950,8 +1231,10 @@ def plot_pairwise_intensities_multi_ratios(
                         x_low = np.percentile(x_all, 3) if len(x_all) > 0 else 0
                         y_low = np.percentile(y_all, 3) if len(y_all) > 0 else 0
 
-                        ax.set_xlim(-x_low, x_lim)
-                        ax.set_ylim(-y_low, y_lim)
+                        #ax.set_xlim(-x_low, x_lim)
+                        #ax.set_ylim(-y_low, y_lim)
+                        ax.set_xlim(-200, x_lim)
+                        ax.set_ylim(-200, y_lim)
                 else:
                     # If no data points were plotted, use default limits
                     x_all = transform_intensity(all_cell_data[x_col], scale)
@@ -963,6 +1246,11 @@ def plot_pairwise_intensities_multi_ratios(
                         max_val = max(x_max, y_max) * 1.1
                         ax.set_xlim(0, max_val)
                         ax.set_ylim(0, max_val)
+
+            if x_lims is not None:
+                ax.set_xlim(x_lims)
+            if y_lims is not None:
+                ax.set_ylim(y_lims)
 
             # Plot dye lines if ratios matrix is provided - AFTER setting axis limits
             if ratios_norm is not None:
@@ -993,7 +1281,7 @@ def plot_pairwise_intensities_multi_ratios(
                 [0], [0], marker="o", color=color, markersize=8, linestyle="", markerfacecolor=color, alpha=1.0
             )
             channel_markers.append(marker)
-            channel_labels.append(f"Channel {chan} ({chan_count} spots)")
+            channel_labels.append(f"{chan} (n={chan_count})")
 
     # Add dye line handles if any
     if legend_handles:
@@ -1011,8 +1299,8 @@ def plot_pairwise_intensities_multi_ratios(
             channel_markers,
             channel_labels,
             loc="center",
-            title="Channels",
-            frameon=True,
+            #title="Channels",
+            frameon=False,
             framealpha=0.8,
             scatterpoints=1,
         )
@@ -1029,18 +1317,35 @@ def plot_pairwise_intensities_multi_ratios(
     # Adjust layout - tighter spacing and better use of available space
     plt.tight_layout(rect=[0, 0, 1, 0.93])  # Leave space for the title
 
+    # if only 1 ax, put legend outside
+    if num_channels == 2:
+        # Move legend outside the plot
+        fig.subplots_adjust(right=0.8)
+        legend_ax.legend(
+            channel_markers,
+            channel_labels,
+            loc="center left",
+            bbox_to_anchor=(1, 0.5),
+            frameon=False,
+            framealpha=0.8,
+            scatterpoints=1,
+        )
+
+        # Resize figure to accommodate legend
+        #fig.set_size_inches(8, 6)
+
     return [fig]
 
-
+@saveable_plot()
 def plot_filtered_intensities(
     plot_df,
-    round_n,
-    mouse_id,
     plot_cell_ids=None,
     channel_label="unmixed_chan",
-    filters=None,
-    save=False,
-    save_dir=Path("../scratch"),
+    scale="linear",
+    xlims = None,
+    ylims = None,
+    title = None,
+    filters=None
 ):
     """
     Plot pairwise intensities with filters for spots data.
@@ -1056,14 +1361,12 @@ def plot_filtered_intensities(
         plot_cell_ids (list, optional): List of cell IDs to plot. Defaults to range(1,20000)
         channel_label (str, optional): Column name for channel labels. Defaults to "unmixed_chan"
         filters (dict, optional): Dictionary of filters to apply. Defaults to basic filters
-        save (bool, optional): Whether to save the plot. Defaults to False
-        save_dir (Path, optional): Directory to save the plot. Defaults to Path("../scratch")
 
     Returns:
         list: List containing the figure
     """
     if plot_cell_ids is None:
-        plot_cell_ids = list(range(1, 20000))
+        plot_cell_ids = list(range(1, 100000))
 
     if filters is not None:
         filtered_df = utils.apply_filters_to_df(plot_df, filters)
@@ -1074,29 +1377,235 @@ def plot_filtered_intensities(
     # Apply filters
 
     # Create plot
-    fig = plot_pairwise_intensities_multi_ratios(filtered_df, plot_cell_ids, scale="linear", chan_col=channel_label)
+    fig = plot_pairwise_intensities_multi_ratios(filtered_df, plot_cell_ids, scale=scale, chan_col=channel_label, x_lims=xlims, y_lims=ylims)
 
     # Add filters to plot title
     title_filters = ", ".join([f"{k}={v}" for k, v in filters.items()])
-    fig[0].suptitle(f"{round_n}\n filter: {title_filters}", fontsize=16)
-
+    #fig[0].suptitle(f"{round_n}\n filter: {title_filters}", fontsize=16)
+    if title is not None:
+        if filters != {}:
+            st = f"{title}\n filter: {title_filters}"
+        else:
+            st = f"{title}"
+        fig[0].suptitle(st, fontsize=16)
+    else:
+        fig[0].suptitle(f"Filter: {title_filters}", fontsize=16)
     # Update channel legend label if legend exists
     legend = fig[0].axes[0].get_legend()
     if legend is not None:
         legend.set_title(f"{channel_label} intensity")
 
-    # Save plot if requested
-    if save:
-        save_dir = save_dir / f"{mouse_id}"
-        save_dir.mkdir(parents=True, exist_ok=True)
-        filters_str = utils.filter_dict_to_string(filters)
-        # change channel_label, "unmixed_chan" -> unmixed, "chan" -> mixed
-        if channel_label == "unmixed_chan":
-            channel_label = "unmixed"
-        elif channel_label == "chan":
-            channel_label = "mixed"
-        filename = f"{round_n}_pairwise_int_{channel_label}_{filters_str}.png"
-        fig[0].savefig(save_dir / filename)
+    # # Save plot if requested
+    # if save:
+
+    # filters_str = utils.filter_dict_to_string(filters)
+    # # change channel_label, "unmixed_chan" -> unmixed, "chan" -> mixed
+    # if channel_label == "unmixed_chan":
+    #     channel_label = "unmixed"
+    # elif channel_label == "chan":
+    #     channel_label = "mixed"
+    #     filename = f"{round_n}_pairwise_int_{channel_label}_{filters_str}.png"
+    #     fig[0].savefig(save_dir / filename)
+
+    return fig
+
+
+# ---- Dye line/Spot intensities improvement ----
+
+def _unit_columns(M: np.ndarray) -> np.ndarray:
+    M = np.asarray(M, dtype=float)
+    col_norms = np.linalg.norm(M, axis=0) + 1e-12
+    return M / col_norms
+
+@saveable_plot()
+def plot_dye_lines_pairwise(
+    intensity_data: np.ndarray,
+    channel_names: list,
+    learned_matrix: np.ndarray,
+    detection_channels: np.ndarray = None,
+    color_map: dict = None,
+    dye_to_label: dict = None,
+    plot_only_pair_dyes: bool = False,
+    plot_dye_lines: bool = True,
+    plot_spots: bool = True,
+    sample_per_channel: int = 5000,
+    p_radius: float = 99.0,
+    figsize: tuple = (10, 10),
+    alpha_points: float = 0.15,
+    s_points: float = 3.0,
+    xlim: tuple = None,
+    ylim: tuple = None,
+    title: str = "Pairwise projections (lower-triangular) with learned dye-line directions",
+):
+    """
+    Lower-triangular matrix of pairwise plots:
+      panel (i, j) shows channel i (y) vs channel j (x) for i > j.
+    Leftmost column has y labels; bottom row has x labels.
+    
+    Parameters
+    ----------
+    color_map : dict, optional
+        Colors for points (by detection label string) and/or dyes.
+        Example: {"Cy3": "#e41a1c", "TxRed": "#377eb8", 0: "#e41a1c", 1: "#377eb8"}
+        Priority for line color: dye_to_label -> color_map[label] -> color_map[dye_id] -> black.
+    dye_to_label : dict, optional
+        Map dye identifier -> detection label (e.g., {0: "Cy3", 1: "TxRed"}).
+    plot_only_pair_dyes : bool
+        If True, only plot dyes whose assigned label matches either axis label of the subplot.
+        Dyes without a mapping are skipped when this is True.
+    plot_dye_lines : bool, default True
+        If True, plot the dye lines. If False, only scatter points are shown.
+    plot_spots : bool, default True
+        If True, plot the scatter points. If False, only dye lines are shown.
+    """
+    sns.set_context("notebook", font_scale=1.2)
+    X = np.asarray(intensity_data, dtype=float)
+    C = X.shape[1]
+    assert C == len(channel_names), "channel_names length must match data width"
+
+    U = _unit_columns(np.asarray(learned_matrix, dtype=float))  # (C, C), columns = dye directions
+
+    # ---- Subsample for plotting ----
+    if detection_channels is not None:
+        detection_channels = np.asarray(detection_channels)
+        plot_idx = []
+        for ch in channel_names:
+            mask = detection_channels == str(ch)
+            ids = np.where(mask)[0]
+            if len(ids) > sample_per_channel:
+                ids = np.random.choice(ids, sample_per_channel, replace=False)
+            plot_idx.append(ids)
+        plot_idx = np.concatenate(plot_idx) if len(plot_idx) else np.arange(len(X))
+        Xp = X[plot_idx]
+        det_plot = detection_channels[plot_idx]
+    else:
+        if len(X) > sample_per_channel * C:
+            plot_idx = np.random.choice(len(X), sample_per_channel * C, replace=False)
+            Xp = X[plot_idx]
+        else:
+            Xp = X
+        det_plot = None
+
+    # ---- Helpers ----
+    def _dye_label(d):
+        """Resolve the assigned detection label for dye d (int or str)."""
+        if dye_to_label is None:
+            return None
+        if d in dye_to_label:
+            return dye_to_label[d]
+        ds = str(d)
+        return dye_to_label.get(ds, None)
+
+    def _line_color(d):
+        """Choose color for dye d using dye_to_label -> color_map[label] -> color_map[d] -> black."""
+        if color_map is None:
+            return "black"
+        lbl = _dye_label(d)
+        if isinstance(lbl, str) and lbl in color_map:
+            return color_map[lbl]
+        if d in color_map:
+            return color_map[d]
+        ds = str(d)
+        return color_map.get(ds, "black")
+
+    def _point_color(lbl):
+        """Color for a detection label string."""
+        if color_map is None:
+            return "gray"
+        return color_map.get(lbl, "gray")
+
+    def _should_plot_dye_in_pair(d, i, j):
+        """Return True if dye d should be drawn in subplot (i,j)."""
+        if not plot_only_pair_dyes:
+            return True
+        lbl = _dye_label(d)
+        if lbl is None:
+            return False  # skip unmapped dyes in this mode
+        return (lbl == str(channel_names[i])) or (lbl == str(channel_names[j]))
+
+    # ---- Create compact figure with only lower triangular subplots ----
+    # Adjust figure size to be more compact
+    compact_figsize = (figsize[0] * 0.8, figsize[1] * 0.8)
+    fig, axes = plt.subplots(C, C, figsize=compact_figsize)
+    if C == 1:
+        axes = np.array([[axes]])
+    
+    # Adjust spacing for compact layout
+    plt.subplots_adjust(hspace=0.1, wspace=0.1, left=0.08, right=0.95, 
+                       top=0.92, bottom=0.12)
+    
+    # Only use lower triangular subplots
+    for i in range(C):
+        for j in range(C):
+            if i <= j:  # hide upper triangle and diagonal
+                axes[i, j].axis("off")
+            else:  # only lower triangle
+                ax = axes[i, j]
+                
+                xi, xj = Xp[:, j], Xp[:, i]  # x: channel j, y: channel i
+
+                # Scatter points (only if plot_spots is True)
+                if plot_spots:
+                    if det_plot is not None:
+                        ax.scatter(xi, xj, c=[_point_color(lbl) for lbl in det_plot],
+                                   s=s_points, alpha=alpha_points)
+                    else:
+                        ax.scatter(xi, xj, s=s_points, alpha=alpha_points, color="gray")
+
+                # Limits and length scale
+                if xlim is not None and ylim is not None:
+                    ax.set_xlim(xlim)
+                    ax.set_ylim(ylim)
+                    Lx = max(abs(xlim[0]), abs(xlim[1]))
+                    Ly = max(abs(ylim[0]), abs(ylim[1]))
+                    L = max(Lx, Ly, 1e-9)
+                else:
+                    r_x = np.percentile(np.abs(xi), p_radius)
+                    r_y = np.percentile(np.abs(xj), p_radius)
+                    L = max(r_x, r_y, 1e-9)
+
+                # Draw dye lines (only if plot_dye_lines is True)
+                if plot_dye_lines:
+                    for d in range(C):
+                        if not _should_plot_dye_in_pair(d, i, j):
+                            continue
+                        v = U[:, d]
+                        v2 = np.array([v[j], v[i]])
+                        norm2 = np.linalg.norm(v2) + 1e-12
+                        p = (L / norm2) * v2
+                        lc = _line_color(d)
+                        # label: prefer assigned label; fallback to "Dye k"
+                        label_text = _dye_label(d) or f"Dye {d+1}"
+                        ax.plot([0, p[0]], [0, p[1]], linewidth=2, color=lc)
+                        ax.text(p[0]*1.05, p[1]*1.05, label_text, color=lc, fontsize=8)
+
+                # Grid and sparse labels
+                ax.grid(True, alpha=0.2)
+                if j == 0:
+                    ax.set_ylabel(channel_names[i])
+                else:
+                    ax.tick_params(axis='y', labelleft=False)
+                if i == C - 1:
+                    ax.set_xlabel(channel_names[j])
+                else:
+                    ax.tick_params(axis='x', labelbottom=False)
+
+    # Legend positioned next to the first subplot
+    if detection_channels is not None and color_map:
+        present = set(map(str, det_plot))
+        handles = [
+            plt.Line2D([], [], marker='o', linestyle='', label=lbl, color=col)
+            for lbl, col in color_map.items()
+            if isinstance(lbl, str) and lbl in present
+        ]
+        if handles:
+            # Position legend next to the first subplot (1,0)
+            first_ax = axes[1, 0]  # First lower triangular subplot
+            legend = first_ax.legend(handles=handles, title="Mixed", 
+                                   bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False)
+
+    # Title closer to subplots
+    #fig.suptitle(title, y=0.95, fontsize=12, wrap=True)
 
     return fig
 
@@ -1104,87 +1613,188 @@ def plot_filtered_intensities(
 # ------------------------------------------------------------------------------------------------
 # Spotiness QC (r, dist, etc)
 # ------------------------------------------------------------------------------------------------
-def plot_spot_metric_dist(spots_df, channel_color_map=None, r_thresh=0.5, dist_thresh=1.0):
-    """Plot distributions of 'r' and 'dist' for each channel."""
+
+@saveable_plot()
+def plot_spot_metric_dist(spots_df, 
+                          channel_color_map=None, 
+                          metrics=['r', 'dist'],
+                          metrics_thresholds=None,
+                          show_thresholds=True):
+    """Plot distributions of spot quality metrics for each channel.
+    
+    Parameters
+    ----------
+    spots_df : pd.DataFrame
+        DataFrame containing spot data with 'chan' and metric columns
+    channel_color_map : dict, optional
+        Dictionary mapping channel names to colors
+    metrics : list of str, default ['r', 'dist']
+        List of metric column names to plot
+    metrics_thresholds : dict, optional
+        Dictionary mapping metric names to threshold values.
+        Example: {'r': 0.5, 'dist': 1.0, 'dye_line_dist_ratio': 4}
+        If None, defaults to {'r': 0.5, 'dist': 1.0}
+    show_thresholds : bool, default True
+        If True, show threshold lines, shading, and statistics text
+    """
     channels = spots_df["chan"].unique()
     n_channels = len(channels)
+    n_metrics = len(metrics)
 
     if channel_color_map is None:
         # channel_color_map = get_channel_color_map()
         raise ValueError("channel_color_map must be provided. refactor to constant")
 
-    fig, axs = plt.subplots(nrows=n_channels, ncols=2, figsize=(8, 4 * n_channels), sharex=False, sharey=False)
+    if metrics_thresholds is None:
+        metrics_thresholds = {'r': 0.5, 'dist': 1.0}
+
+    fig, axs = plt.subplots(nrows=n_channels, ncols=n_metrics, figsize=(4 * n_metrics, 4 * n_channels), sharex=False, sharey=False)
+    
+    # Handle single metric case
+    if n_metrics == 1:
+        axs = axs.reshape(-1, 1)
 
     for i, chan in enumerate(channels):
         chan_data = spots_df[spots_df["chan"] == chan]
 
-        # Plot 'r' distribution
-        axs[i, 0].hist(chan_data["r"], bins=100, color=channel_color_map[chan], alpha=0.7)
-        axs[i, 0].set_title(f"{chan} - r Distribution", fontsize=16)
-        axs[i, 0].set_xlabel("r (corr)", fontsize=14)
-        axs[i, 0].set_ylabel("Frequency", fontsize=14)
-        axs[i, 0].grid(True, alpha=0.3)
+        for j, metric in enumerate(metrics):
+            # Check if metric exists in dataframe
+            if metric not in chan_data.columns:
+                axs[i, j].text(0.5, 0.5, f"Metric '{metric}' not found", 
+                              ha='center', va='center', transform=axs[i, j].transAxes)
+                axs[i, j].set_title(f"{chan} - {metric}", fontsize=16)
+                continue
 
-        # Plot 'dist' distribution
-        axs[i, 1].hist(chan_data["dist"], bins=100, color=channel_color_map[chan], alpha=0.7)
-        axs[i, 1].set_title(f"{chan} - dist Distribution", fontsize=16)
-        axs[i, 1].set_xlabel("dist", fontsize=14)
-        axs[i, 1].set_ylabel("Frequency", fontsize=14)
-        axs[i, 1].grid(True, alpha=0.3)
+            # Plot metric distribution
+            axs[i, j].hist(chan_data[metric], bins=100, color=channel_color_map[chan], alpha=0.7)
+            axs[i, j].set_title(f"{chan} - {metric}", fontsize=16)
+            axs[i, j].set_xlabel(metric, fontsize=14)
+            axs[i, j].set_ylabel("Frequency", fontsize=14)
+            axs[i, j].grid(True, alpha=0.3)
 
-        # add vertical lines for thresholds
-        axs[i, 0].axvline(r_thresh, color="red", linestyle="--", label="r threshold", alpha=0.5)
-        axs[i, 1].axvline(dist_thresh, color="red", linestyle="--", label="dist threshold", alpha=0.5)
+            # Apply threshold visualization if metric has a threshold
+            if show_thresholds and metric in metrics_thresholds:
+                thresh = metrics_thresholds[metric]
+                
+                # add vertical line for threshold
+                axs[i, j].axvline(thresh, color="red", linestyle="--", 
+                                 label=f"{metric} threshold", alpha=0.5)
+                axs[i, j].legend(loc="lower right")
 
-        # add legends to to right
-        axs[i, 0].legend(loc="lower right")
-        axs[i, 1].legend(loc="lower right")
+                # Determine shading direction based on metric
+                # For 'r', shade below threshold (bad spots)
+                # For 'dist' and 'dye_line_to_dist', shade above threshold (bad spots)
+                if metric == 'r':
+                    # Shade area below threshold
+                    axs[i, j].fill_betweenx(axs[i, j].get_ylim(), 0, thresh, 
+                                           color="grey", alpha=0.3)
+                    comparison_op = '<'
+                    n_filtered = chan_data[chan_data[metric] < thresh].shape[0]
+                else:
+                    # Shade area above threshold
+                    axs[i, j].fill_betweenx(axs[i, j].get_ylim(), thresh, 
+                                           axs[i, j].get_xlim()[1], color="grey", alpha=0.2)
+                    comparison_op = '>'
+                    n_filtered = chan_data[chan_data[metric] > thresh].shape[0]
 
-        # for r dist, add shaded area for r < r_thresh
-        axs[i, 0].fill_betweenx(axs[i, 0].get_ylim(), 0, r_thresh, color="grey", alpha=0.1)
+                # Set appropriate x-axis limits
+                if metric == 'r':
+                    axs[i, j].set_xlim(0, 1)
+                elif metric == 'dye_line_dist_ratio':
+                    axs[i, j].set_xlim(0, 15)
+                else:
+                    axs[i, j].set_xlim(0, max(chan_data[metric].max(), thresh * 1.1))
 
-        # for dist dist, add shaded area for dist > dist_thresh
-        axs[i, 1].fill_betweenx(axs[i, 1].get_ylim(), dist_thresh, axs[i, 1].get_xlim()[1], color="grey", alpha=0.1)
-        # axs[i, 0].set_xlim(0, max(chan_data['r'].max(), r_thresh * 1.1))
-        # set r 0 to 1
-        axs[i, 0].set_xlim(0, 1)
-        axs[i, 1].set_xlim(0, max(chan_data["dist"].max(), dist_thresh * 1.1))
+                # Adjust ylim to top of shaded area
+                axs[i, j].set_ylim(0, axs[i, j].get_ylim()[1])
 
-        # adjust ylime to top of shaded area
-        axs[i, 0].set_ylim(0, axs[i, 0].get_ylim()[1])
-        axs[i, 1].set_ylim(0, axs[i, 1].get_ylim()[1])
+                # Calculate and display statistics
+                total_spots = chan_data.shape[0]
+                percent_filtered = (n_filtered / total_spots) * 100 if total_spots > 0 else 0
 
-        # calc number of spots below r_thresh and above dist_thresh
-        n_below_r_thresh = chan_data[chan_data["r"] < r_thresh].shape[0]
-        n_above_dist_thresh = chan_data[chan_data["dist"] > dist_thresh].shape[0]
-        total_spots = chan_data.shape[0]
-
-        percent_below_r_thresh = (n_below_r_thresh / total_spots) * 100 if total_spots > 0 else 0
-        percent_above_dist_thresh = (n_above_dist_thresh / total_spots) * 100 if total_spots > 0 else 0
-
-        # add to legends
-        axs[i, 0].text(
-            0.05,
-            0.95,
-            f"Below r < {r_thresh}: {n_below_r_thresh} ({percent_below_r_thresh:.2f}%)",
-            transform=axs[i, 0].transAxes,
-            fontsize=12,
-            verticalalignment="top",
-        )
-        axs[i, 1].text(
-            0.05,
-            0.95,
-            f"Above dist > {dist_thresh}: {n_above_dist_thresh} ({percent_above_dist_thresh:.2f}%)",
-            transform=axs[i, 1].transAxes,
-            fontsize=12,
-            verticalalignment="top",
-        )
+                # Add statistics text
+                axs[i, j].text(
+                    0.05,
+                    0.95,
+                    f"{comparison_op} {metric} {thresh}: {n_filtered} ({percent_filtered:.2f}%)",
+                    transform=axs[i, j].transAxes,
+                    fontsize=10,
+                    verticalalignment="top",
+                )
 
     plt.tight_layout()
     plt.subplots_adjust(hspace=0.4, wspace=0.3)
 
     return fig
 
+# ------------------------------------------------------------------------------------------------
+# Batch figure drivers
+# ------------------------------------------------------------------------------------------------
+
+def batch_plot_dye_lines(ds, rounds_list, base_dir):
+    """
+    Plot pairwise dye lines for multiple rounds of a dataset.
+
+    Parameters:
+    ----------
+    ds : HCRDataset
+        The HCR dataset object.
+    rounds_list : list of str
+        List of round keys to process.
+    base_dir : Path
+        Base directory to save the plots.
+    """
+    base_dir = Path(base_dir)
+
+    for round_key in rounds_list:
+        mouse_id = ds.mouse_id
+        output_dir = base_dir / f"{mouse_id}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        mouse_name = ds.metadata.get("nickname", ds.mouse_id)
+
+        # get filtered spots
+        cell_info = ds.rounds[round_key].get_cell_info(source="mixed_cxg")
+        filt_cell_info = seg.filter_cell_info(cell_info)
+        filt_cell_ids = filt_cell_info.cell_id.unique().tolist()
+        spots_df = ds.rounds[round_key].load_spots(table_type="mixed", filter_cell_ids=filt_cell_ids)
+
+        # make array of intensities
+        intensity_cols = [col for col in spots_df.columns if col.endswith('intensity')]
+        intensity_array = spots_df[intensity_cols].to_numpy()
+        print(f"Intensity array shape: {intensity_array.shape}")
+
+        # labels
+        pm = ds.rounds[round_key].processing_manifest
+        channels = pm["spot_channels"]
+        dye_to_label = {0: '488', 1: '514', 2: '561', 3: '594', 4: '638'}
+
+        ratios = read_ratios_file(ds.rounds[round_key].spot_files.ratios_file)
+        detected_channels = spots_df["chan"].values
+
+        for plot_spots in [True, False]:
+            filename = f"{mouse_id}_{round_key}_pairwise_dye_lines_spots={plot_spots}"
+            print(f"Plotting round {round_key}, plot_spots={plot_spots}")
+            plot_dye_lines_pairwise(
+                intensity_array, channels, ratios,
+                detected_channels, color_map=constants.CHAN_CMAP_SOFT,
+                dye_to_label=dye_to_label,
+                sample_per_channel=10000,
+                plot_only_pair_dyes=True,
+                plot_dye_lines=True,
+                plot_spots=plot_spots,
+                xlim=(0, 1500), ylim=(0, 1500),
+                figsize=(15, 15),
+                alpha_points=0.5,
+                # @saveable_plot() params
+                save=True,
+                output_dir=output_dir,
+                filename=filename,
+                show=False
+            )
+
+# ------------------------------------------------------------------------------------------------
+# Spectral unmixing QC
+# ------------------------------------------------------------------------------------------------
 
 def qc_spectral_unmixing(data_dir, output_dir, channels=None, verbose=False):
     """

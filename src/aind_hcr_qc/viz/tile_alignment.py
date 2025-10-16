@@ -4184,6 +4184,506 @@ def visualize_orthogonal_views(self, z_slice=None, y_slice=None, x_slice=None, o
     return fig, axes
 
 
+# ----
+# overlap/roi filtering 
+# -----
+def plot_bbox_outlines(bbox_array, title="Bounding Box Outlines"):
+    """
+    Plot the outlines of bounding boxes, ignoring Z dimension.
+    
+    Parameters:
+    bbox_array: numpy array of shape (n, 6) with format [min_x, max_x, min_y, max_y, min_z, max_z]
+    title: string title for the plot
+    """
+    if bbox_array.size == 0:
+        print("No bounding boxes to plot")
+        return
+    
+    # Extract coordinates and handle potential inversions
+    x1 = bbox_array[:, 0]
+    x2 = bbox_array[:, 1] 
+    y1 = bbox_array[:, 2]
+    y2 = bbox_array[:, 3]
+    
+    # Ensure min/max are correct (handle inversions)
+    min_x = np.minimum(x1, x2)
+    max_x = np.maximum(x1, x2)
+    min_y = np.minimum(y1, y2)
+    max_y = np.maximum(y1, y2)
+    
+    # Find canvas size from max extents
+    canvas_min_x = min_x.min()
+    canvas_max_x = max_x.max()
+    canvas_min_y = min_y.min()
+    canvas_max_y = max_y.max()
+    
+    # Create plot
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    # Generate colors for each bounding box
+    colors = plt.cm.tab20(np.linspace(0, 1, len(bbox_array)))
+    
+    # Plot each bounding box outline with different color
+    for i in range(len(bbox_array)):
+        # Create rectangle outline
+        rect_x = [min_x[i], max_x[i], max_x[i], min_x[i], min_x[i]]
+        rect_y = [min_y[i], min_y[i], max_y[i], max_y[i], min_y[i]]
+        
+        ax.plot(rect_x, rect_y, color=colors[i], linewidth=2, alpha=0.8, label=f'Box {i}')
+    
+    # Set canvas limits with some padding
+    padding_x = (canvas_max_x - canvas_min_x) * 0.05
+    padding_y = (canvas_max_y - canvas_min_y) * 0.05
+    
+    ax.set_xlim(canvas_min_x - padding_x, canvas_max_x + padding_x)
+    ax.set_ylim(canvas_min_y - padding_y, canvas_max_y + padding_y)
+    
+    ax.set_xlabel('X coordinate')
+    ax.set_ylabel('Y coordinate')
+    ax.set_title(f'{title} (n={len(bbox_array)} boxes)')
+    ax.grid(True, alpha=0.3)
+    ax.set_aspect('equal')
+    
+    # Add legend if not too many boxes
+    if len(bbox_array) <= 20:
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return fig, ax
+
+
+def calculate_overlap_regions(xml_dict, adjacent_pairs, tile_size=(1920, 1920, 795)):
+    """
+    Calculate overlap bounding boxes between adjacent tile pairs in nominal grid coordinates.
+    
+    Parameters:
+    -----------
+    xml_dict : dict
+        Dictionary containing 'tile_names' and 'net_transforms'
+    adjacent_pairs : list of tuples
+        List of (tile_name_a, tile_name_b) pairs
+    tile_size : tuple
+        (width, height, depth) of tiles in pixels, default (1920, 1920, 795)
+    
+    Returns:
+    --------
+    list of dict
+        Each dict contains:
+        - 'tile_a': name of first tile
+        - 'tile_b': name of second tile  
+        - 'overlap_bbox': [x_min, x_max, y_min, y_max, z_min, z_max] in nominal grid coords
+        - 'overlap_width': width of overlap in X
+        - 'overlap_height': height of overlap in Y
+    """
+    tile_names = xml_dict['tile_names']
+    net_transforms = xml_dict['net_transforms']
+    
+    # Create reverse lookup: tile_name -> setup_id
+    name_to_id = {name: setup_id for setup_id, name in tile_names.items()}
+    
+    overlap_regions = []
+    
+    for tile_a_name, tile_b_name in adjacent_pairs:
+        # Get setup IDs
+        id_a = name_to_id[tile_a_name]
+        id_b = name_to_id[tile_b_name]
+        
+        # Get transforms (last column is translation)
+        transform_a = net_transforms[id_a]
+        transform_b = net_transforms[id_b]
+        
+        # Extract translations (position of tile origin in nominal grid)
+        pos_a = transform_a[:3, 3]  # [x, y, z]
+        pos_b = transform_b[:3, 3]
+        
+        # Calculate tile bounding boxes in nominal grid
+        # Tile A bounds
+        a_x_min, a_y_min, a_z_min = pos_a
+        a_x_max = a_x_min + tile_size[0]
+        a_y_max = a_y_min + tile_size[1]
+        a_z_max = a_z_min + tile_size[2]
+        
+        # Tile B bounds
+        b_x_min, b_y_min, b_z_min = pos_b
+        b_x_max = b_x_min + tile_size[0]
+        b_y_max = b_y_min + tile_size[1]
+        b_z_max = b_z_min + tile_size[2]
+        
+        # Calculate overlap (intersection of two boxes)
+        overlap_x_min = max(a_x_min, b_x_min)
+        overlap_x_max = min(a_x_max, b_x_max)
+        overlap_y_min = max(a_y_min, b_y_min)
+        overlap_y_max = min(a_y_max, b_y_max)
+        overlap_z_min = max(a_z_min, b_z_min)
+        overlap_z_max = min(a_z_max, b_z_max)
+        
+        # Check if there's actual overlap
+        if overlap_x_max > overlap_x_min and overlap_y_max > overlap_y_min:
+            overlap_width = overlap_x_max - overlap_x_min
+            overlap_height = overlap_y_max - overlap_y_min
+            overlap_depth = overlap_z_max - overlap_z_min
+            
+            overlap_regions.append({
+                'tile_a': tile_a_name,
+                'tile_b': tile_b_name,
+                'setup_a': id_a,
+                'setup_b': id_b,
+                'overlap_bbox': [overlap_x_min, overlap_x_max, 
+                               overlap_y_min, overlap_y_max,
+                               overlap_z_min, overlap_z_max],
+                'overlap_width': overlap_width,
+                'overlap_height': overlap_height,
+                'overlap_depth': overlap_depth,
+                'overlap_volume': overlap_width * overlap_height * overlap_depth
+            })
+        else:
+            # No overlap found
+            overlap_regions.append({
+                'tile_a': tile_a_name,
+                'tile_b': tile_b_name,
+                'setup_a': id_a,
+                'setup_b': id_b,
+                'overlap_bbox': None,
+                'overlap_width': 0,
+                'overlap_height': 0,
+                'overlap_depth': 0,
+                'overlap_volume': 0
+            })
+    
+    return overlap_regions
+
+
+# Helper function to extract just the bounding boxes as array
+def get_overlap_bbox_array_from_dict(xml_dict, adjacent_pairs, tile_size=(1920, 1920, 795)):
+    """
+    Get overlap bounding boxes as a numpy array for plotting.
+    
+    Returns:
+    --------
+    numpy array of shape (n, 6) with [x_min, x_max, y_min, y_max, z_min, z_max]
+    """
+    overlap_regions = calculate_overlap_regions(xml_dict, adjacent_pairs, tile_size)
+    
+    # Filter out regions with no overlap and extract bounding boxes
+    bboxes = [region['overlap_bbox'] for region in overlap_regions 
+              if region['overlap_bbox'] is not None]
+    
+    return np.array(bboxes) if bboxes else np.array([])
+
+
+def shorten_tile_name(tile_name):
+    """
+    Shorten tile name from 'Tile_X_0000_Y_0001_Z_0000_ch_405.zarr' to '00-01-00'
+    
+    Parameters:
+    -----------
+    tile_name : str
+        Full tile name
+        
+    Returns:
+    --------
+    str : shortened name in format 'XX-YY-ZZ'
+    """
+    import re
+    # Extract X, Y, Z numbers from tile name
+    match = re.search(r'Tile_X_(\d+)_Y_(\d+)_Z_(\d+)', tile_name)
+    if match:
+        x, y, z = match.groups()
+        # shorten leading 2 zeros
+        x = x[-2:]
+        y = y[-2:]
+        z = z[-2:]
+        return f"{x}-{y}"
+    return tile_name  # fallback
+
+
+def calculate_tile_centroids(xml_dict, tile_size=(1920, 1920, 795)):
+    """
+    Calculate centroid positions of tiles in nominal grid coordinates.
+    
+    Parameters:
+    -----------
+    xml_dict : dict
+        Dictionary containing 'tile_names' and 'net_transforms'
+    tile_size : tuple
+        (width, height, depth) of tiles in pixels
+        
+    Returns:
+    --------
+    dict : {tile_name: (centroid_x, centroid_y, centroid_z)}
+    """
+    tile_names = xml_dict['tile_names']
+    net_transforms = xml_dict['net_transforms']
+    
+    centroids = {}
+    
+    for setup_id, tile_name in tile_names.items():
+        transform = net_transforms[setup_id]
+        pos = transform[:3, 3]  # [x, y, z] position of tile origin
+        
+        # Centroid is at the center of the tile
+        centroid_x = pos[0] + tile_size[0] / 2
+        centroid_y = pos[1] + tile_size[1] / 2
+        centroid_z = pos[2] + tile_size[2] / 2
+        
+        centroids[tile_name] = (centroid_x, centroid_y, centroid_z)
+    
+    return centroids
+
+
+def plot_bbox_outlines(bbox_array, title="Bounding Box Outlines", 
+                       xml_dict=None, pairs=None, 
+                       plot_tile_labels=False, plot_centroids=False):
+    """
+    Plot the outlines of bounding boxes, ignoring Z dimension.
+    
+    Parameters:
+    -----------
+    bbox_array : numpy array
+        Array of shape (n, 6) with format [min_x, max_x, min_y, max_y, min_z, max_z]
+    title : str
+        Title for the plot
+    xml_dict : dict, optional
+        Dictionary containing 'tile_names' and 'net_transforms' (required for labels/centroids)
+    pairs : list of tuples, optional
+        List of (tile_a_name, tile_b_name) pairs (required for labels/centroids)
+    plot_tile_labels : bool
+        Whether to plot tile labels at tile centroids
+    plot_centroids : bool
+        Whether to plot tile centroids as points
+    """
+    if bbox_array.size == 0:
+        print("No bounding boxes to plot")
+        return
+    
+    # Extract coordinates and handle potential inversions
+    x1 = bbox_array[:, 0]
+    x2 = bbox_array[:, 1] 
+    y1 = bbox_array[:, 2]
+    y2 = bbox_array[:, 3]
+    
+    # Ensure min/max are correct (handle inversions)
+    min_x = np.minimum(x1, x2)
+    max_x = np.maximum(x1, x2)
+    min_y = np.minimum(y1, y2)
+    max_y = np.maximum(y1, y2)
+    
+    # Find canvas size from max extents
+    canvas_min_x = min_x.min()
+    canvas_max_x = max_x.max()
+    canvas_min_y = min_y.min()
+    canvas_max_y = max_y.max()
+    
+    # Create plot
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    # Generate colors for each bounding box
+    colors = plt.cm.tab20(np.linspace(0, 1, len(bbox_array)))
+    
+    # Plot each bounding box outline with different color
+    for i in range(len(bbox_array)):
+        # Create rectangle outline
+        rect_x = [min_x[i], max_x[i], max_x[i], min_x[i], min_x[i]]
+        rect_y = [min_y[i], min_y[i], max_y[i], max_y[i], min_y[i]]
+        
+        ax.plot(rect_x, rect_y, color=colors[i], linewidth=2, alpha=0.8, label=f'Box {i}')
+    
+    # Plot tile labels and/or centroids if requested
+    if (plot_tile_labels or plot_centroids) and xml_dict is not None:
+        centroids = calculate_tile_centroids(xml_dict)
+        plotted_tiles = set()  # Track which tiles we've already plotted
+        
+        # Get unique tiles from pairs
+        if pairs is not None:
+            for tile_a, tile_b in pairs:
+                for tile_name in [tile_a, tile_b]:
+                    if tile_name not in plotted_tiles and tile_name in centroids:
+                        cx, cy, _ = centroids[tile_name]
+                        
+                        if plot_centroids:
+                            ax.plot(cx, cy, 'ro', markersize=8, alpha=0.7, zorder=10)
+                        
+                        if plot_tile_labels:
+                            short_name = shorten_tile_name(tile_name)
+                            ax.text(cx, cy, short_name, 
+                                   ha='center', va='center',
+                                   fontsize=10, #fontweight='bold',
+                                   bbox=dict(boxstyle='round,pad=0.1', 
+                                           facecolor='white', 
+                                           edgecolor='grey',
+                                           alpha=0.5),
+                                   zorder=11)
+                        
+                        plotted_tiles.add(tile_name)
+    
+    # Set canvas limits with some padding
+    padding_x = (canvas_max_x - canvas_min_x) * 0.05
+    padding_y = (canvas_max_y - canvas_min_y) * 0.05
+    
+    ax.set_xlim(canvas_min_x - padding_x, canvas_max_x + padding_x)
+    ax.set_ylim(canvas_min_y - padding_y, canvas_max_y + padding_y)
+    
+    ax.set_xlabel('X coordinate')
+    ax.set_ylabel('Y coordinate')
+    ax.set_title(f'{title} (n={len(bbox_array)} boxes)')
+    ax.grid(True, alpha=0.3)
+    ax.set_aspect('equal')
+
+    # invert y 
+    ax.invert_yaxis()
+
+    # Add legend if not too many boxes
+    if len(bbox_array) <= 20:
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"Canvas size: X=[{canvas_min_x:.1f}, {canvas_max_x:.1f}], Y=[{canvas_min_y:.1f}, {canvas_max_y:.1f}]")
+
+
+# good function
+def filter_rois_in_overlap_regions(df, overlap_regions, 
+                                   overlap_threshold=0.2,
+                                   id_col='cell_id',
+                                   bbox_cols=['bbox_min_x', 'bbox_max_x', 'bbox_min_y', 'bbox_max_y']):
+    """
+    Filter out ROIs that have significant overlap with tile boundary regions.
+    Uses vectorized operations with quick rejection for speed.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with ROI bounding boxes in 0,0 origin coordinates
+    overlap_regions : list of dict
+        List of overlap region dicts from calculate_overlap_regions()
+        Each dict has 'overlap_bbox': [x_min, x_max, y_min, y_max, z_min, z_max] in nominal grid coords
+    overlap_threshold : float
+        Fraction of ROI area that must be in overlap region to filter (default 0.2 = 20%)
+    id_col : str
+        Name of the ID column (default 'cell_id')
+    bbox_cols : list
+        Column names for [min_x, max_x, min_y, max_y]
+    
+    Returns:
+    --------
+    filtered_df : pd.DataFrame
+        DataFrame with ROIs in overlap regions removed
+    filtered_ids : list
+        List of IDs that were filtered out
+    """
+    # Extract overlap bounding boxes and convert to 0,0 origin
+    all_overlap_bboxes = [r['overlap_bbox'] for r in overlap_regions if r['overlap_bbox'] is not None]
+    
+    if len(all_overlap_bboxes) == 0:
+        print("No overlap regions found")
+        return df, []
+    
+    all_overlap_array = np.array(all_overlap_bboxes)
+    # Find global minimum to convert to 0,0 origin
+    global_x_min = all_overlap_array[:, 0].min()
+    global_y_min = all_overlap_array[:, 2].min()
+    
+    print(f"Global offset: x_min={global_x_min:.1f}, y_min={global_y_min:.1f}")
+    
+    # Convert all overlap regions to 0,0 origin and stack as arrays for vectorization
+    n_overlaps = len(all_overlap_bboxes)
+    overlap_x_min = all_overlap_array[:, 0] - global_x_min
+    overlap_x_max = all_overlap_array[:, 1] - global_x_min
+    overlap_y_min = all_overlap_array[:, 2] - global_y_min
+    overlap_y_max = all_overlap_array[:, 3] - global_y_min
+    
+    print(f"Processing {len(df)} ROIs against {n_overlaps} overlap regions")
+    
+    # Extract ROI bounding boxes as numpy arrays (already in 0,0 origin)
+    roi_x_min = df[bbox_cols[0]].values
+    roi_x_max = df[bbox_cols[1]].values
+    roi_y_min = df[bbox_cols[2]].values
+    roi_y_max = df[bbox_cols[3]].values
+    
+    # Calculate ROI areas
+    roi_areas = (roi_x_max - roi_x_min) * (roi_y_max - roi_y_min)
+    
+    # Initialize mask for ROIs to keep (True = keep, False = filter out)
+    keep_mask = np.ones(len(df), dtype=bool)
+    
+    # Process each overlap region
+    for i in range(n_overlaps):
+        # Quick rejection test: check if ROIs even intersect with this overlap region
+        # No intersection if: roi is completely to left, right, above, or below overlap region
+        no_intersect = (
+            (roi_x_max <= overlap_x_min[i]) |  # ROI completely to left
+            (roi_x_min >= overlap_x_max[i]) |  # ROI completely to right
+            (roi_y_max <= overlap_y_min[i]) |  # ROI completely above
+            (roi_y_min >= overlap_y_max[i])    # ROI completely below
+        )
+        
+        # Only process ROIs that potentially intersect
+        potential_intersect_mask = ~no_intersect & keep_mask
+        
+        if not potential_intersect_mask.any():
+            continue  # No ROIs intersect this overlap region
+        
+        # Calculate intersection for ROIs that might intersect
+        intersect_x_min = np.maximum(roi_x_min[potential_intersect_mask], overlap_x_min[i])
+        intersect_x_max = np.minimum(roi_x_max[potential_intersect_mask], overlap_x_max[i])
+        intersect_y_min = np.maximum(roi_y_min[potential_intersect_mask], overlap_y_min[i])
+        intersect_y_max = np.minimum(roi_y_max[potential_intersect_mask], overlap_y_max[i])
+        
+        # Check for actual intersection (intersection width and height > 0)
+        has_intersect = (intersect_x_max > intersect_x_min) & (intersect_y_max > intersect_y_min)
+        
+        if not has_intersect.any():
+            continue
+        
+        # Calculate intersection areas
+        intersect_areas = np.zeros(potential_intersect_mask.sum())
+        intersect_areas[has_intersect] = (
+            (intersect_x_max[has_intersect] - intersect_x_min[has_intersect]) *
+            (intersect_y_max[has_intersect] - intersect_y_min[has_intersect])
+        )
+        
+        # Calculate overlap fractions
+        overlap_fractions = intersect_areas / roi_areas[potential_intersect_mask]
+        
+        # Mark ROIs that exceed threshold for filtering
+        filter_these = overlap_fractions >= overlap_threshold
+        
+        # Update keep_mask for the subset we checked
+        temp_mask = keep_mask.copy()
+        temp_mask[potential_intersect_mask] = ~filter_these
+        keep_mask = keep_mask & temp_mask
+    
+    # Apply filter
+    filtered_df = df[keep_mask].copy()
+    filtered_ids = df[~keep_mask][id_col].tolist()
+    
+    print(f"Filtered {len(filtered_ids)} / {len(df)} ROIs ({len(filtered_ids)/len(df)*100:.1f}%)")
+    print(f"Remaining: {len(filtered_df)} ROIs")
+    
+    return filtered_df, filtered_ids
+
+# Note: likely dont need, loads the pairwise result which insructable, instead I recalculated
+# def get_overlap_bbox_array(ds):
+#     round_key = list(ds.rounds.keys())[0]  # or use a specific round if needed
+#     pc_xml = ds.rounds[round_key].tile_alignment_files.pc_xml
+#     import xmltodict
+
+#     with open(pc_xml, "r") as file:
+#         data = xmltodict.parse(file.read())
+
+#     pwr = data['SpimData']['StitchingResults']['PairwiseResult']
+
+#     overlap_boxes = []
+#     for item in pwr:
+#         if 'overlap_boundingbox' in item:
+#             bbox_values = [float(x) for x in item['overlap_boundingbox'].split()]
+#             overlap_boxes.append(bbox_values)
+
+#     return np.array(overlap_boxes)
+    
 # ---
 # Tile Alignment QC
 # ---

@@ -195,6 +195,7 @@ def plot_centroids(
     n_samples=None,
     color_col=None,
     cmap="Blues",
+    size=4,
     clip_range=(None, None),
     xlims=(None, None),
     ylims=(None, None),
@@ -220,6 +221,9 @@ def plot_centroids(
     # Sample random cells
     if n_samples is not None:
         df = df.sample(n=n_samples, random_state=random_state)
+
+    # map to common centroid name for cols
+    df = df.rename(columns={'centroid_x': 'x_centroid', 'centroid_y': 'y_centroid', 'centroid_z': 'z_centroid'})
 
     # if clip_range is specified, clip the color_col
     if color_col is not None:
@@ -248,12 +252,12 @@ def plot_centroids(
 
     # use color col to set colorbar of scatter values
     if color_col is not None:
-        scatter = ax.scatter(df[x_coord], df[y_coord], alpha=0.5, c=df[color_col], cmap=cmap, s=4)
+        scatter = ax.scatter(df[x_coord], df[y_coord], alpha=0.5, c=df[color_col], cmap=cmap, s=size)
         # Add colorbar
         cbar = fig.colorbar(scatter, ax=ax)
         cbar.set_label(color_col, rotation=270, labelpad=15)
     else:
-        ax.scatter(df[x_coord], df[y_coord], alpha=0.3, s=1)
+        ax.scatter(df[x_coord], df[y_coord], alpha=0.3, s=size)
     if xlims[0] is not None or xlims[1] is not None:
         ax.set_xlim(xlims[0], xlims[1])
     else:
@@ -262,7 +266,7 @@ def plot_centroids(
         ax.set_ylim(ylims[0], ylims[1])
     else:
         ax.set_ylim(df[y_coord].min() - 10, df[y_coord].max() + 10)
-    ax.set_aspect("equal", adjustable="box")
+    #ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel(f"{x_coord}")
     ax.set_ylabel(f"{y_coord}")
     ax.set_title(f"Cell Centroids - {plane} (n={n_samples if n_samples is not None else len(df)})")
@@ -585,6 +589,12 @@ def plot_single_cell_segmentation_overview(
             x_planes,
         )
     return fig
+
+
+
+# ---
+# Main QC function
+# ----
 
 
 def qc_segmentation(

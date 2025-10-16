@@ -33,6 +33,13 @@ Quality control analysis for AIND HCR data processing. Provides tools for valida
 Intergration will AIND QC portal will happen when team identifies and evaluates essential plots.
 
 ## Change log
+**v0.4.0 (10/16/2025)**
++  new metadata parsing and accessors in HCRRound/HCRDataset
++ improved loading spot functions, cleaned up returned dataframe
++ added get_spot_channel_gene_map()
++ added simple soma classifier (logistic regression)
++ added HCR cell filters, to remove non-somas (classifier of choice) and overlap cells
+
 **v0.3.9 (8/11/2025)**
 + Add spot detection visualization function to plot top 10 cells per gene based on spot count
 + Implement segmentation overview plotting with single and multi-view options
