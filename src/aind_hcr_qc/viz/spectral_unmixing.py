@@ -41,7 +41,7 @@ def read_ratios_file(filename):
             row = [float(val) for val in line.strip().split()]
             ratios.append(row)
 
-        return np.array(ratios).T
+        return np.array(ratios)
     except Exception as e:
         print(f"Error reading ratios file: {e}")
         return None
