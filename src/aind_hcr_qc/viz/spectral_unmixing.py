@@ -1902,5 +1902,489 @@ def qc_spectral_unmixing(data_dir, output_dir, channels=None, verbose=False):
         print("Spectral unmixing QC completed successfully!")
 
 
-def dummy_func():
-    """Dummy function"""
+# -----------------------------------------------------------------------------------
+# Unique Spot ID Creation
+# -----------------------------------------------------------------------------------
+
+def create_unique_spot_id(spots_df):
+    """
+    Create a unique spot identifier by combining channel and chan_spot_id.
+    
+    Parameters
+    ----------
+    spots_df : pd.DataFrame
+        DataFrame with 'chan' and 'chan_spot_id' columns
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with added 'unique_spot_id' column
+    """
+    spots_df = spots_df.copy()
+    spots_df['unique_spot_id'] = spots_df['chan'].astype(str) + '_' + spots_df['chan_spot_id'].astype(str)
+    return spots_df
+
+
+# -----------------------------------------------------------------------------------
+# Reassignment matrix
+# -----------------------------------------------------------------------------------
+
+def create_reassignment_matrix(unmixed_spots_df, normalize=False):
+    """
+    Create a reassignment matrix showing how spots are reassigned from chan to unmixed_chan.
+    
+    Parameters
+    ----------
+    unmixed_spots_df : pd.DataFrame
+        DataFrame with 'chan' and 'unmixed_chan' columns
+    normalize : bool or str
+        If False, returns raw counts
+        If 'rows', normalize by row (original channel) - shows what % of each original channel went to each unmixed channel
+        If 'cols', normalize by column (unmixed channel) - shows what % of each unmixed channel came from each original channel
+        If 'total', normalize by total count
+    
+    Returns
+    -------
+    pd.DataFrame
+        Matrix where rows are original 'chan' and columns are 'unmixed_chan'
+    """
+    # Create crosstab
+    reassignment_matrix = pd.crosstab(
+        unmixed_spots_df['chan'], 
+        unmixed_spots_df['unmixed_chan'],
+        margins=False
+    )
+    
+    if normalize == 'rows':
+        # Normalize by rows - each row sums to 1 (or 100%)
+        reassignment_matrix = reassignment_matrix.div(reassignment_matrix.sum(axis=1), axis=0)
+    elif normalize == 'cols':
+        # Normalize by columns - each column sums to 1 (or 100%)
+        reassignment_matrix = reassignment_matrix.div(reassignment_matrix.sum(axis=0), axis=1)
+    elif normalize == 'total':
+        # Normalize by total - entire matrix sums to 1 (or 100%)
+        reassignment_matrix = reassignment_matrix / reassignment_matrix.sum().sum()
+    elif normalize is not False:
+        raise ValueError("normalize must be False, 'rows', 'cols', or 'total'")
+    
+    return reassignment_matrix
+
+
+def plot_reassignment_matrix(reassignment_matrix, 
+                            normalize=False,
+                            title="Channel Reassignment Matrix",
+                            figsize=(8, 6),
+                            cmap="YlOrRd",
+                            annot=True,
+                            fmt=None,
+                            label_colors=None,
+                            ax=None,
+                            cbar_label=None,
+                            show_gene_names=False,
+                            chan_gene_map=None):
+    """
+    Plot a heatmap of the reassignment matrix.
+    
+    Parameters
+    ----------
+    reassignment_matrix : pd.DataFrame
+        Matrix from create_reassignment_matrix() with rows as original 'chan' and columns as 'unmixed_chan'
+    normalize : bool or str
+        If the matrix is normalized, affects formatting and colorbar label.
+        Should match the normalize parameter used in create_reassignment_matrix()
+    title : str
+        Title for the plot
+    figsize : tuple
+        Figure size (width, height) if ax is None
+    cmap : str
+        Colormap for the heatmap (default: "YlOrRd")
+    annot : bool
+        Whether to annotate cells with values
+    fmt : str, optional
+        Format string for annotations. If None, auto-detects based on normalize parameter
+    label_colors : dict, optional
+        Dict mapping channel names to colors for axis labels (e.g., {488: '#00FF00', 514: '#FFFF00'})
+    ax : matplotlib.axes.Axes, optional
+        Axis to plot on. If None, creates new figure
+    cbar_label : str, optional
+        Label for colorbar. If None, auto-generates based on normalize parameter
+    show_gene_names : bool, optional
+        If True, show gene names in tick labels instead of just channel numbers
+    chan_gene_map : dict, optional
+        Dict mapping channel numbers to gene names. Required if show_gene_names=True
+    
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+        The axes object with the heatmap
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    
+    # Auto-detect format based on normalization
+    if fmt is None:
+        if normalize in ['rows', 'cols', 'total']:
+            fmt = '.2f'  # Decimal format (e.g., 0.85 instead of 85%)
+        else:
+            fmt = 'g'  # General format for integers
+    
+    # Auto-generate colorbar label
+    if cbar_label is None:
+        if normalize == 'rows':
+            cbar_label = "Fraction of Original Channel"
+        elif normalize == 'cols':
+            cbar_label = "Fraction of Unmixed Channel"
+        elif normalize == 'total':
+            cbar_label = "Fraction of Total Spots"
+        else:
+            cbar_label = "Spot Count"
+    
+    # Create heatmap first with default labels
+    sns.heatmap(
+        reassignment_matrix,
+        annot=annot,
+        fmt=fmt,
+        cmap=cmap,
+        ax=ax,
+        cbar_kws={'label': cbar_label},
+        linewidths=0.5,
+        linecolor='gray'
+    )
+    
+    ax.set_title(title, fontsize=14, pad=10)
+    ax.set_xlabel("Unmixed Channel", fontsize=12)
+    ax.set_ylabel("Original Channel", fontsize=12)
+    
+    # Update tick labels with gene names if requested
+    if show_gene_names and chan_gene_map is not None:
+        # Get the original channel values from the matrix
+        row_channels = reassignment_matrix.index.tolist()
+        col_channels = reassignment_matrix.columns.tolist()
+        
+        # Create new labels with gene names
+        yticklabels = []
+        for chan in row_channels:
+            chan_str = str(chan)
+            # Try both string and int keys
+            gene_name = chan_gene_map.get(chan_str, chan_gene_map.get(int(chan_str) if chan_str.isdigit() else None, str(chan)))
+            yticklabels.append(f"{gene_name}\n{chan}")
+        
+        xticklabels = []
+        for chan in col_channels:
+            chan_str = str(chan)
+            # Try both string and int keys
+            gene_name = chan_gene_map.get(chan_str, chan_gene_map.get(int(chan_str) if chan_str.isdigit() else None, str(chan)))
+            xticklabels.append(f"{gene_name}\n{chan}")
+        
+        ax.set_yticklabels(yticklabels)
+        ax.set_xticklabels(xticklabels)
+    
+    # Color axis labels if colors provided
+    if label_colors is not None:
+        # Get the original channel values to use for color lookup
+        row_channels = reassignment_matrix.index.tolist()
+        col_channels = reassignment_matrix.columns.tolist()
+        
+        for idx, (label, chan) in enumerate(zip(ax.get_yticklabels(), row_channels)):
+            chan_str = str(chan)
+            # Try string key first, then int key
+            if chan_str in label_colors:
+                label.set_color(label_colors[chan_str])
+            elif chan_str.isdigit() and int(chan_str) in label_colors:
+                label.set_color(label_colors[int(chan_str)])
+            label.set_rotation(0)
+            label.set_va('center')
+        
+        for idx, (label, chan) in enumerate(zip(ax.get_xticklabels(), col_channels)):
+            chan_str = str(chan)
+            # Try string key first, then int key
+            if chan_str in label_colors:
+                label.set_color(label_colors[chan_str])
+            elif chan_str.isdigit() and int(chan_str) in label_colors:
+                label.set_color(label_colors[int(chan_str)])
+            label.set_ha('center')
+    
+    plt.tight_layout()
+    return ax
+
+
+def analyze_spot_fate(mixed_spots_df, unmixed_spots_df):
+    """
+    Analyze the fate of spots during unmixing: fixed (same channel), reassigned, or removed.
+    
+    Parameters
+    ----------
+    mixed_spots_df : pd.DataFrame
+        DataFrame with mixed spots, must have 'chan' and 'chan_spot_id' columns
+    unmixed_spots_df : pd.DataFrame
+        DataFrame with unmixed spots, must have 'chan', 'chan_spot_id', and 'unmixed_chan' columns
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns ['original_chan', 'fixed', 'reassigned', 'removed', 'total']
+        where each row represents an original channel and values are spot counts
+    """
+    # Create unique spot IDs
+    mixed_with_uid = create_unique_spot_id(mixed_spots_df)
+    unmixed_with_uid = create_unique_spot_id(unmixed_spots_df)
+    
+    # Get unique spot IDs from both dataframes
+    mixed_spot_ids = set(mixed_with_uid['unique_spot_id'])
+    unmixed_spot_ids = set(unmixed_with_uid['unique_spot_id'])
+    
+    # Removed spots: in mixed but not in unmixed
+    removed_spot_ids = mixed_spot_ids - unmixed_spot_ids
+    
+    # Analyze fate by original channel
+    fate_data = []
+    
+    for chan in sorted(mixed_with_uid['chan'].unique()):
+        # Get all spots from this channel in mixed data
+        chan_mixed_spots = mixed_with_uid[mixed_with_uid['chan'] == chan]
+        chan_spot_ids = set(chan_mixed_spots['unique_spot_id'])
+        
+        # Count removed spots from this channel
+        removed_from_chan = len(chan_spot_ids & removed_spot_ids)
+        
+        # Get spots from this channel that survived unmixing
+        survived_spot_ids = chan_spot_ids - removed_spot_ids
+        survived_spots = unmixed_with_uid[unmixed_with_uid['unique_spot_id'].isin(survived_spot_ids)]
+        
+        # Count fixed (stayed in same channel) vs reassigned (moved to different channel)
+        fixed_count = len(survived_spots[survived_spots['unmixed_chan'] == chan])
+        reassigned_count = len(survived_spots[survived_spots['unmixed_chan'] != chan])
+        
+        total = len(chan_spot_ids)
+        
+        fate_data.append({
+            'original_chan': str(chan),
+            'fixed': fixed_count,
+            'reassigned': reassigned_count,
+            'removed': removed_from_chan,
+            'total': total
+        })
+    
+    fate_df = pd.DataFrame(fate_data)
+    return fate_df
+
+
+def plot_spot_fate(fate_df, 
+                  title="Spot Fate During Unmixing",
+                  figsize=(10, 6),
+                  label_colors=None,
+                  ax=None,
+                  show_percentages=True):
+    """
+    Plot stacked bar chart showing the fate of spots from each channel during unmixing.
+    
+    Parameters
+    ----------
+    fate_df : pd.DataFrame
+        DataFrame from analyze_spot_fate() with columns ['original_chan', 'fixed', 'reassigned', 'removed', 'total']
+    title : str
+        Title for the plot
+    figsize : tuple
+        Figure size (width, height) if ax is None
+    label_colors : dict, optional
+        Dict mapping channel names to colors for x-axis labels
+    ax : matplotlib.axes.Axes, optional
+        Axis to plot on. If None, creates new figure
+    show_percentages : bool
+        If True, show percentages in addition to counts
+    
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+        The axes object with the plot
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    
+    # Prepare data for stacking
+    channels = fate_df['original_chan'].values
+    fixed = fate_df['fixed'].values
+    reassigned = fate_df['reassigned'].values
+    removed = fate_df['removed'].values
+    total = fate_df['total'].values
+    
+    x = np.arange(len(channels))
+    width = 0.7
+    
+    # Create stacked bars
+    colors_fate = {
+        'fixed': '#2ecc71',      # Green
+        'reassigned': '#f39c12',  # Orange
+        'removed': '#e74c3c'      # Red
+    }
+    
+    p1 = ax.bar(x, fixed, width, label='Fixed', color=colors_fate['fixed'])
+    p2 = ax.bar(x, reassigned, width, bottom=fixed, label='Reassigned', color=colors_fate['reassigned'])
+    p3 = ax.bar(x, removed, width, bottom=fixed+reassigned, label='Removed', color=colors_fate['removed'])
+    
+    # Add value labels on bars
+    if show_percentages:
+        for i, (f, r, rm, t) in enumerate(zip(fixed, reassigned, removed, total)):
+            # Fixed percentage
+            if f > 0:
+                pct = f / t * 100
+                y_pos = f / 2
+                ax.text(i, y_pos, f'{pct:.1f}%', ha='center', va='center', 
+                       fontsize=9, fontweight='bold', color='white')
+            
+            # Reassigned percentage
+            if r > 0:
+                pct = r / t * 100
+                y_pos = f + r / 2
+                ax.text(i, y_pos, f'{pct:.1f}%', ha='center', va='center', 
+                       fontsize=9, fontweight='bold', color='white')
+            
+            # Removed percentage
+            if rm > 0:
+                pct = rm / t * 100
+                y_pos = f + r + rm / 2
+                ax.text(i, y_pos, f'{pct:.1f}%', ha='center', va='center', 
+                       fontsize=9, fontweight='bold', color='white')
+    
+    ax.set_xlabel('Original Channel', fontsize=12)
+    ax.set_ylabel('Number of Spots', fontsize=12)
+    ax.set_title(title, fontsize=14, pad=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(channels)
+    ax.legend(loc='upper right')
+    
+    # Color x-axis labels if colors provided
+    if label_colors is not None:
+        for i, label in enumerate(ax.get_xticklabels()):
+            chan = label.get_text()
+            if chan in label_colors:
+                label.set_color(label_colors[chan])
+    
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    plt.tight_layout()
+    return ax
+
+
+@saveable_plot()
+def fig_unmixing_comprehensive(ds, round_name, mixed_spots_df, unmixed_spots_df,
+                                color_map=None, 
+                                ch_dye_map=None,
+                                figsize=(18, 5)):
+    """
+    Create a comprehensive 3-panel figure showing:
+    1. Ratios matrix (spectral unmixing coefficients)
+    2. Reassignment matrix (how spots move between channels)
+    3. Spot fate bar plot (fixed/reassigned/removed)
+    
+    Parameters
+    ----------
+    ds : HCRDataset
+        Dataset object
+    round_name : str
+        Round name (e.g., 'R5')
+    mixed_spots_df : pd.DataFrame
+        Mixed spots dataframe for the round
+    unmixed_spots_df : pd.DataFrame
+        Unmixed spots dataframe for the round
+    color_map : dict, optional
+        Dict mapping channel names to colors (defaults to Z1_CHANNEL_CMAP_SOFT)
+    ch_dye_map : dict, optional
+        Dict mapping channel numbers to dye names
+    figsize : tuple
+        Figure size (width, height)
+    
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    axes : np.ndarray
+        Array of 3 axes
+    fate_df : pd.DataFrame
+        Spot fate analysis dataframe
+    """
+    if color_map is None:
+        color_map = constants.Z1_CHANNEL_CMAP_SOFT
+    
+    if ch_dye_map is None:
+        ch_dye_map = {488: "AF488", 514: "AF514", 561: "AF546", 594: "AF594", 638: "AF647"}
+    
+    sns.set(font_scale=1.2)
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+    # filter spots to the given round
+    mixed_spots_df = mixed_spots_df[mixed_spots_df['round'] == round_name]
+    unmixed_spots_df = unmixed_spots_df[unmixed_spots_df['round'] == round_name]
+    
+    # ---------------------------
+    # Panel 1: Ratios Matrix
+    # ---------------------------
+    rd = ds.rounds[round_name]
+    spot_ch = rd.get_spot_channel_gene_map()
+    rf = rd.spot_files.ratios_file
+    
+    if rf is not None:
+        ratios = read_ratios_file(rf)
+        col_names = list(spot_ch.keys())
+        row_names = [ch_dye_map.get(int(ch), ch) for ch in spot_ch.keys()]
+        colors = [color_map[ch] for ch in spot_ch.keys()]
+        
+        # Plot ratios heatmap
+        matrix = np.array(ratios)
+        sns.heatmap(matrix, annot=True, cmap="Greys", fmt="g",
+                    xticklabels=col_names, yticklabels=row_names, ax=axes[0])
+        axes[0].set_title(f"Unmixing Ratios\n{round_name}", fontsize=14, pad=10)
+        axes[0].set_xlabel("Camera channel")
+        axes[0].set_ylabel("Dye")
+        
+        # Color and center-justify tick labels
+        for idx, label in enumerate(axes[0].get_yticklabels()):
+            if idx < len(colors):
+                label.set_color(colors[idx])
+            label.set_va('center')
+            label.set_rotation(0)
+        
+        for idx, label in enumerate(axes[0].get_xticklabels()):
+            if idx < len(colors):
+                label.set_color(colors[idx])
+            label.set_ha('center')
+    else:
+        axes[0].text(0.5, 0.5, 'No ratios file found', ha='center', va='center')
+        axes[0].set_title(f"Unmixing Ratios\n{round_name}")
+        axes[0].set_xticks([])
+        axes[0].set_yticks([])
+    
+    # ---------------------------
+    # Panel 2: Reassignment Matrix
+    # ---------------------------
+    reassignment_matrix = create_reassignment_matrix(unmixed_spots_df, normalize='rows')
+    plot_reassignment_matrix(
+        reassignment_matrix,
+        normalize='rows',
+        title=f"Reassignment Matrix\n{round_name}",
+        label_colors=color_map,
+        ax=axes[1],
+        cmap="YlOrRd",
+        show_gene_names=True,
+        chan_gene_map=spot_ch
+    )
+    
+    # ---------------------------
+    # Panel 3: Spot Fate
+    # ---------------------------
+    fate_df = analyze_spot_fate(mixed_spots_df, unmixed_spots_df)
+    plot_spot_fate(
+        fate_df,
+        title=f"Spot Fate\n{round_name}",
+        label_colors=color_map,
+        ax=axes[2],
+        show_percentages=True
+    )
+    
+    # Overall title
+    mouse_name = ds.metadata.get("nickname", ds.mouse_id)
+    genotype_short = ds.metadata.get("genotype_short", "")
+    suptitle = f"{mouse_name} ({genotype_short}) - {round_name} Unmixing Analysis".strip()
+    fig.suptitle(suptitle, fontsize=16, y=1.02)
+    
+    plt.tight_layout()
+    return fig, axes, fate_df
+
