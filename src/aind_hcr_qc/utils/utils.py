@@ -231,3 +231,151 @@ def saveable_plot(defaults: dict | None = None):
             return ret
         return wrapper
     return decorator
+
+
+# -------------------------------------------------------------------------------------------------
+# Image file utilities
+# -------------------------------------------------------------------------------------------------
+
+
+def _natural_sort_key(s):
+    """
+    Sort strings with numbers naturally (1, 2, 10 instead of 1, 10, 2).
+    
+    Parameters
+    ----------
+    s : str or Path
+        String or Path to sort
+        
+    Returns
+    -------
+    list
+        List of string and int components for natural sorting
+    """
+    return [int(text) if text.isdigit() else text.lower()
+            for text in re.split('([0-9]+)', str(s))]
+
+
+def combine_pngs_to_pdf(
+    input_dir: str | Path,
+    output_path: str | Path | None = None,
+    pattern: str = "*.png",
+    sort: bool = True,
+    verbose: bool = True
+) -> Path | None:
+    """
+    Combine all PNG files in a directory into a single multi-page PDF.
+    
+    Parameters
+    ----------
+    input_dir : str | Path
+        Directory containing PNG files
+    output_path : str | Path | None
+        Output PDF path. If None, saves as 'combined.pdf' in input_dir
+    pattern : str
+        Glob pattern for matching files (default: "*.png")
+    sort : bool
+        Whether to sort files naturally by name (default: True)
+    verbose : bool
+        Whether to print progress messages (default: True)
+    
+    Returns
+    -------
+    Path | None
+        Path to the created PDF file, or None if no PNG files found
+        
+    Examples
+    --------
+    >>> # Combine all PNG files in a directory
+    >>> combine_pngs_to_pdf("/path/to/figures")
+    
+    >>> # Combine with specific pattern and custom output
+    >>> combine_pngs_to_pdf(
+    ...     input_dir="/path/to/figures",
+    ...     output_path="/path/to/output.pdf",
+    ...     pattern="*_analysis.png"
+    ... )
+    
+    Notes
+    -----
+    Requires PIL/Pillow package. Images with RGBA mode will be converted
+    to RGB with white background. All images are converted to RGB mode
+    as required by PDF format.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        raise ImportError(
+            "PIL/Pillow is required for combine_pngs_to_pdf. "
+            "Install with: pip install Pillow"
+        )
+    
+    input_dir = Path(input_dir)
+    
+    # Find all PNG files
+    png_files = list(input_dir.glob(pattern))
+    
+    if not png_files:
+        if verbose:
+            print(f"No PNG files found matching '{pattern}' in {input_dir}")
+        return None
+    
+    # Sort files naturally
+    if sort:
+        png_files = sorted(png_files, key=_natural_sort_key)
+    
+    if verbose:
+        print(f"Found {len(png_files)} PNG files")
+    
+    # Convert all images to RGB (PDF requires RGB mode)
+    images = []
+    for png_path in png_files:
+        try:
+            img = Image.open(png_path)
+            # Convert RGBA to RGB if needed
+            if img.mode == 'RGBA':
+                rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+                rgb_img.paste(img, mask=img.split()[3])  # Use alpha channel as mask
+                images.append(rgb_img)
+            elif img.mode != 'RGB':
+                images.append(img.convert('RGB'))
+            else:
+                images.append(img)
+            if verbose:
+                print(f"  ✓ {png_path.name}")
+        except Exception as e:
+            if verbose:
+                print(f"  ✗ Failed to load {png_path.name}: {e}")
+            continue
+    
+    if not images:
+        if verbose:
+            print("No valid images to combine")
+        return None
+    
+    # Set output path
+    if output_path is None:
+        output_path = input_dir / "combined.pdf"
+    else:
+        output_path = Path(output_path)
+    
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save as PDF
+    try:
+        images[0].save(
+            output_path,
+            save_all=True,
+            append_images=images[1:],
+            resolution=300.0,
+            quality=95
+        )
+        if verbose:
+            print(f"\n✓ Saved PDF: {output_path}")
+            print(f"  Pages: {len(images)}")
+        return output_path
+    except Exception as e:
+        if verbose:
+            print(f"\n✗ Failed to save PDF: {e}")
+        return None
