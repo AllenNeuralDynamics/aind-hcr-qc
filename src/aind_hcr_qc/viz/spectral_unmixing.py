@@ -2437,8 +2437,6 @@ def cross_channel_nn(
     # Split A and B
     is_a = df[chan_col] == chan_a
     is_b = df[chan_col] == chan_b
-    print(is_a.value_counts())
-    print(is_b.value_counts())
 
     df_a = df[is_a]
     df_b = df[is_b]
