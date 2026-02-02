@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from scipy.spatial import cKDTree
 
 from aind_hcr_qc.utils import utils
 
@@ -2388,3 +2389,95 @@ def fig_unmixing_comprehensive(ds, round_name, mixed_spots_df, unmixed_spots_df,
     plt.tight_layout()
     return fig, axes, fate_df
 
+
+# ---
+# Analysis of unmixing issues
+# ---
+
+
+
+
+def cross_channel_nn(
+    spots_df: pd.DataFrame,
+    chan_a,
+    chan_b,
+    coord_cols=("z", "y", "x"),
+    cell_col="cell_id",
+    chan_col="chan",
+    scale=(1.0, 1.0, 1.0),   # e.g. (z_um_per_vox, y_um_per_px, x_um_per_px) to handle anisotropy
+    dropna_cell=True,
+) -> pd.DataFrame:
+    """
+    Compute cross-channel nearest-neighbor distances A->B and B->A within each cell.
+
+    Returns a tidy DataFrame with one row per query spot (in A or B):
+      - query_index: original index in spots_df
+      - query_chan: A or B
+      - nn_index: index of nearest neighbor spot in the other channel (same cell)
+      - nn_dist: Euclidean distance in scaled coordinate units
+      - cell_id: cell id
+    """
+    df = spots_df.copy()
+
+    # Normalize channel dtype for matching
+    df[chan_col] = df[chan_col].astype(str)
+    chan_a = str(chan_a)
+    chan_b = str(chan_b)
+
+    if dropna_cell:
+        df = df[df[cell_col].notna()]
+
+    # Pre-scale coordinates (handles anisotropic z)
+    coords = df.loc[:, coord_cols].to_numpy(dtype=float)
+    scale = np.asarray(scale, dtype=float)
+    if scale.shape != (len(coord_cols),):
+        raise ValueError(f"`scale` must have length {len(coord_cols)}")
+    coords_scaled = coords * scale[None, :]
+
+    # Split A and B
+    is_a = df[chan_col] == chan_a
+    is_b = df[chan_col] == chan_b
+    print(is_a.value_counts())
+    print(is_b.value_counts())
+
+    df_a = df[is_a]
+    df_b = df[is_b]
+
+    # Early exit if empty
+    if len(df_a) == 0 or len(df_b) == 0:
+        print(f"Empty DataFrame: df_a: {len(df_a)}, df_b: {len(df_b)}")
+        return pd.DataFrame(columns=["query_index","query_chan","nn_index","nn_dist",cell_col])
+
+    # We'll look within each cell separately
+    out_rows = []
+    for cell_id, group in df.groupby(cell_col, sort=False):
+        a_idx = group.index[group[chan_col] == chan_a].to_numpy()
+        b_idx = group.index[group[chan_col] == chan_b].to_numpy()
+        if len(a_idx) == 0 or len(b_idx) == 0:
+            continue
+
+        a_pts = coords_scaled[df.index.get_indexer(a_idx)]
+        b_pts = coords_scaled[df.index.get_indexer(b_idx)]
+
+        # A -> B
+        tree_b = cKDTree(b_pts)
+        dists_ab, nnpos_ab = tree_b.query(a_pts, k=1)
+        nn_idx_ab = b_idx[nnpos_ab]
+        out_rows.extend(
+            (qi, chan_a, ni, float(di), cell_id)
+            for qi, ni, di in zip(a_idx, nn_idx_ab, dists_ab)
+        )
+
+        # B -> A
+        tree_a = cKDTree(a_pts)
+        dists_ba, nnpos_ba = tree_a.query(b_pts, k=1)
+        nn_idx_ba = a_idx[nnpos_ba]
+        out_rows.extend(
+            (qi, chan_b, ni, float(di), cell_id)
+            for qi, ni, di in zip(b_idx, nn_idx_ba, dists_ba)
+        )
+
+    return pd.DataFrame(
+        out_rows,
+        columns=["query_index", "query_chan", "nn_index", "nn_dist", cell_col]
+    )
