@@ -2396,89 +2396,248 @@ def fig_unmixing_comprehensive(ds, round_name, mixed_spots_df, unmixed_spots_df,
 
 
 
-def cross_channel_nn(
+# def cross_channel_nn(
+#     spots_df: pd.DataFrame,
+#     chan_a,
+#     chan_b,
+#     coord_cols=("z", "y", "x"),
+#     cell_col="cell_id",
+#     chan_col="chan",
+#     scale=(1.0, 1.0, 1.0),   # e.g. (z_um_per_vox, y_um_per_px, x_um_per_px) to handle anisotropy
+#     dropna_cell=True,
+# ) -> pd.DataFrame:
+#     """
+#     Compute cross-channel nearest-neighbor distances A->B and B->A within each cell.
+
+#     Returns a tidy DataFrame with one row per query spot (in A or B):
+#       - query_index: original index in spots_df
+#       - query_chan: A or B
+#       - nn_index: index of nearest neighbor spot in the other channel (same cell)
+#       - nn_dist: Euclidean distance in scaled coordinate units
+#       - cell_id: cell id
+#     """
+#     df = spots_df.copy()
+
+#     # Normalize channel dtype for matching
+#     df[chan_col] = df[chan_col].astype(str)
+#     chan_a = str(chan_a)
+#     chan_b = str(chan_b)
+
+#     if dropna_cell:
+#         df = df[df[cell_col].notna()]
+
+#     # Pre-scale coordinates (handles anisotropic z)
+#     coords = df.loc[:, coord_cols].to_numpy(dtype=float)
+#     scale = np.asarray(scale, dtype=float)
+#     if scale.shape != (len(coord_cols),):
+#         raise ValueError(f"`scale` must have length {len(coord_cols)}")
+#     coords_scaled = coords * scale[None, :]
+
+#     # Split A and B
+#     is_a = df[chan_col] == chan_a
+#     is_b = df[chan_col] == chan_b
+
+#     df_a = df[is_a]
+#     df_b = df[is_b]
+
+#     # Early exit if empty
+#     if len(df_a) == 0 or len(df_b) == 0:
+#         print(f"Empty DataFrame: df_a: {len(df_a)}, df_b: {len(df_b)}")
+#         return pd.DataFrame(columns=["query_index","query_chan","nn_index","nn_dist",cell_col])
+
+#     # We'll look within each cell separately
+#     out_rows = []
+#     for cell_id, group in df.groupby(cell_col, sort=False):
+#         a_idx = group.index[group[chan_col] == chan_a].to_numpy()
+#         b_idx = group.index[group[chan_col] == chan_b].to_numpy()
+#         if len(a_idx) == 0 or len(b_idx) == 0:
+#             continue
+
+#         a_pts = coords_scaled[df.index.get_indexer(a_idx)]
+#         b_pts = coords_scaled[df.index.get_indexer(b_idx)]
+
+#         # A -> B
+#         tree_b = cKDTree(b_pts)
+#         dists_ab, nnpos_ab = tree_b.query(a_pts, k=1)
+#         nn_idx_ab = b_idx[nnpos_ab]
+#         out_rows.extend(
+#             (qi, chan_a, ni, float(di), cell_id)
+#             for qi, ni, di in zip(a_idx, nn_idx_ab, dists_ab)
+#         )
+
+#         # B -> A
+#         tree_a = cKDTree(a_pts)
+#         dists_ba, nnpos_ba = tree_a.query(b_pts, k=1)
+#         nn_idx_ba = a_idx[nnpos_ba]
+#         out_rows.extend(
+#             (qi, chan_b, ni, float(di), cell_id)
+#             for qi, ni, di in zip(b_idx, nn_idx_ba, dists_ba)
+#         )
+
+#     return pd.DataFrame(
+#         out_rows,
+#         columns=["query_index", "query_chan", "nn_index", "nn_dist", cell_col]
+#     )
+
+import torch
+def cross_channel_nn_gpu(
     spots_df: pd.DataFrame,
     chan_a,
     chan_b,
     coord_cols=("z", "y", "x"),
     cell_col="cell_id",
     chan_col="chan",
-    scale=(1.0, 1.0, 1.0),   # e.g. (z_um_per_vox, y_um_per_px, x_um_per_px) to handle anisotropy
+    scale=(1.0, 1.0, 1.0),
     dropna_cell=True,
+    device='cuda',
+    batch_size=50000,  # Process cells in batches to manage GPU memory
 ) -> pd.DataFrame:
     """
-    Compute cross-channel nearest-neighbor distances A->B and B->A within each cell.
-
-    Returns a tidy DataFrame with one row per query spot (in A or B):
-      - query_index: original index in spots_df
-      - query_chan: A or B
-      - nn_index: index of nearest neighbor spot in the other channel (same cell)
-      - nn_dist: Euclidean distance in scaled coordinate units
-      - cell_id: cell id
+    GPU-accelerated cross-channel nearest-neighbor distances using PyTorch.
+    
+    Parameters
+    ----------
+    device : str
+        'cuda' for GPU, 'cpu' for CPU fallback
+    batch_size : int
+        Number of spots to process at once on GPU (reduce if OOM)
     """
     df = spots_df.copy()
-
-    # Normalize channel dtype for matching
+    
+    # Normalize channel dtype
     df[chan_col] = df[chan_col].astype(str)
     chan_a = str(chan_a)
     chan_b = str(chan_b)
-
+    
     if dropna_cell:
         df = df[df[cell_col].notna()]
-
-    # Pre-scale coordinates (handles anisotropic z)
-    coords = df.loc[:, coord_cols].to_numpy(dtype=float)
-    scale = np.asarray(scale, dtype=float)
+    
+    # Check if CUDA is available
+    if device == 'cuda' and not torch.cuda.is_available():
+        print("CUDA not available, falling back to CPU")
+        device = 'cpu'
+    
+    # Pre-scale coordinates
+    coords = df.loc[:, coord_cols].to_numpy(dtype=np.float32)  # float32 for GPU efficiency
+    scale = np.asarray(scale, dtype=np.float32)
     if scale.shape != (len(coord_cols),):
         raise ValueError(f"`scale` must have length {len(coord_cols)}")
     coords_scaled = coords * scale[None, :]
-
+    
+    # Convert to torch tensor on GPU
+    coords_tensor = torch.from_numpy(coords_scaled).to(device)
+    
     # Split A and B
     is_a = df[chan_col] == chan_a
     is_b = df[chan_col] == chan_b
-
+    
     df_a = df[is_a]
     df_b = df[is_b]
-
+    
     # Early exit if empty
     if len(df_a) == 0 or len(df_b) == 0:
         print(f"Empty DataFrame: df_a: {len(df_a)}, df_b: {len(df_b)}")
         return pd.DataFrame(columns=["query_index","query_chan","nn_index","nn_dist",cell_col])
-
-    # We'll look within each cell separately
+    
     out_rows = []
+    
+    # Process each cell
     for cell_id, group in df.groupby(cell_col, sort=False):
         a_idx = group.index[group[chan_col] == chan_a].to_numpy()
         b_idx = group.index[group[chan_col] == chan_b].to_numpy()
+        
         if len(a_idx) == 0 or len(b_idx) == 0:
             continue
-
-        a_pts = coords_scaled[df.index.get_indexer(a_idx)]
-        b_pts = coords_scaled[df.index.get_indexer(b_idx)]
-
-        # A -> B
-        tree_b = cKDTree(b_pts)
-        dists_ab, nnpos_ab = tree_b.query(a_pts, k=1)
-        nn_idx_ab = b_idx[nnpos_ab]
+        
+        # Get indices in the tensor
+        a_tensor_idx = df.index.get_indexer(a_idx)
+        b_tensor_idx = df.index.get_indexer(b_idx)
+        
+        a_pts = coords_tensor[a_tensor_idx]  # Shape: (n_a, 3)
+        b_pts = coords_tensor[b_tensor_idx]  # Shape: (n_b, 3)
+        
+        # A -> B: Find nearest B for each A
+        # Use batched distance computation to avoid OOM
+        n_a = len(a_pts)
+        n_b = len(b_pts)
+        
+        if n_a * n_b < batch_size * batch_size:
+            # Small enough to compute all at once
+            # Shape: (n_a, n_b)
+            dists_ab = torch.cdist(a_pts, b_pts, p=2)
+            nn_dists_ab, nn_idx_ab = torch.min(dists_ab, dim=1)
+            
+            # Convert back to CPU and numpy
+            nn_dists_ab = nn_dists_ab.cpu().numpy()
+            nn_idx_ab = nn_idx_ab.cpu().numpy()
+        else:
+            # Process in batches
+            nn_dists_ab = []
+            nn_idx_ab = []
+            
+            for i in range(0, n_a, batch_size):
+                end_i = min(i + batch_size, n_a)
+                batch_a = a_pts[i:end_i]
+                
+                # Compute distances for this batch
+                dists_batch = torch.cdist(batch_a, b_pts, p=2)
+                nn_dists_batch, nn_idx_batch = torch.min(dists_batch, dim=1)
+                
+                nn_dists_ab.append(nn_dists_batch.cpu().numpy())
+                nn_idx_ab.append(nn_idx_batch.cpu().numpy())
+                
+                # Clear GPU cache
+                del dists_batch, nn_dists_batch, nn_idx_batch
+                if device == 'cuda':
+                    torch.cuda.empty_cache()
+            
+            nn_dists_ab = np.concatenate(nn_dists_ab)
+            nn_idx_ab = np.concatenate(nn_idx_ab)
+        
+        nn_actual_idx_ab = b_idx[nn_idx_ab]
         out_rows.extend(
             (qi, chan_a, ni, float(di), cell_id)
-            for qi, ni, di in zip(a_idx, nn_idx_ab, dists_ab)
+            for qi, ni, di in zip(a_idx, nn_actual_idx_ab, nn_dists_ab)
         )
-
-        # B -> A
-        tree_a = cKDTree(a_pts)
-        dists_ba, nnpos_ba = tree_a.query(b_pts, k=1)
-        nn_idx_ba = a_idx[nnpos_ba]
+        
+        # B -> A: Find nearest A for each B
+        if n_a * n_b < batch_size * batch_size:
+            dists_ba = torch.cdist(b_pts, a_pts, p=2)
+            nn_dists_ba, nn_idx_ba = torch.min(dists_ba, dim=1)
+            
+            nn_dists_ba = nn_dists_ba.cpu().numpy()
+            nn_idx_ba = nn_idx_ba.cpu().numpy()
+        else:
+            nn_dists_ba = []
+            nn_idx_ba = []
+            
+            for i in range(0, n_b, batch_size):
+                end_i = min(i + batch_size, n_b)
+                batch_b = b_pts[i:end_i]
+                
+                dists_batch = torch.cdist(batch_b, a_pts, p=2)
+                nn_dists_batch, nn_idx_batch = torch.min(dists_batch, dim=1)
+                
+                nn_dists_ba.append(nn_dists_batch.cpu().numpy())
+                nn_idx_ba.append(nn_idx_batch.cpu().numpy())
+                
+                del dists_batch, nn_dists_batch, nn_idx_batch
+                if device == 'cuda':
+                    torch.cuda.empty_cache()
+            
+            nn_dists_ba = np.concatenate(nn_dists_ba)
+            nn_idx_ba = np.concatenate(nn_idx_ba)
+        
+        nn_actual_idx_ba = a_idx[nn_idx_ba]
         out_rows.extend(
             (qi, chan_b, ni, float(di), cell_id)
-            for qi, ni, di in zip(b_idx, nn_idx_ba, dists_ba)
+            for qi, ni, di in zip(b_idx, nn_actual_idx_ba, nn_dists_ba)
         )
-
+    
     return pd.DataFrame(
         out_rows,
         columns=["query_index", "query_chan", "nn_index", "nn_dist", cell_col]
     )
-
 
 def compute_channel_pair_proximity_stats(
     nn_df: pd.DataFrame,
@@ -2539,79 +2698,61 @@ def compute_all_channel_pair_proximity_stats(
     chan_col="chan",
     scale=(1.0, 1.0, 1.0),
     dropna_cell=True,
+    use_gpu=True,  # NEW: enable GPU acceleration
+    device='cuda',
+    batch_size=100000,
 ) -> pd.DataFrame:
     """
-    For all unique channel pairs in spots_df, compute cross-channel nearest neighbors
-    and then calculate the number of close and distant spots.
+    Compute proximity stats for all channel pairs with optional GPU acceleration.
     
-    Parameters:
-    -----------
-    spots_df : pd.DataFrame
-        DataFrame containing spot data with 'chan' column
-    distance_threshold : float
-        Distance threshold to separate close vs distant spots
-    coord_cols : tuple
-        Column names for coordinates
-    cell_col : str
-        Column name for cell IDs
-    chan_col : str
-        Column name for channel labels
-    scale : tuple
-        Scaling factors for (z, y, x) coordinates
-    dropna_cell : bool
-        Whether to drop spots without cell assignments
-    
-    Returns:
-    --------
-    pd.DataFrame
-        DataFrame with columns: ['chan_a', 'chan_b', 'close_spots', 'distant_spots', 'total_spots', 'pct_close']
-        Each row represents a unique channel pair
+    Parameters
+    ----------
+    use_gpu : bool
+        If True, use GPU-accelerated version (requires PyTorch + CUDA)
+    device : str
+        'cuda' for GPU, 'cpu' for CPU
+    batch_size : int
+        Batch size for GPU processing
     """
-    # Get unique channels
     channels = sorted(spots_df[chan_col].unique())
-    
     results = []
     
-    # Iterate over all unique pairs (avoiding duplicates)
+    # Choose NN function based on GPU availability
+    nn_func = cross_channel_nn_gpu if use_gpu else cross_channel_nn
+    
     for i, chan_a in enumerate(channels):
         for chan_b in channels[i+1:]:
-            # Compute cross-channel nearest neighbors
-            nn_df = cross_channel_nn(
-                spots_df,
-                chan_a=chan_a,
-                chan_b=chan_b,
-                coord_cols=coord_cols,
-                cell_col=cell_col,
-                chan_col=chan_col,
-                scale=scale,
-                dropna_cell=dropna_cell,
-            )
+            if use_gpu:
+                nn_df = nn_func(
+                    spots_df, chan_a=chan_a, chan_b=chan_b,
+                    coord_cols=coord_cols, cell_col=cell_col, chan_col=chan_col,
+                    scale=scale, dropna_cell=dropna_cell,
+                    device=device, batch_size=batch_size
+                )
+            else:
+                nn_df = nn_func(
+                    spots_df, chan_a=chan_a, chan_b=chan_b,
+                    coord_cols=coord_cols, cell_col=cell_col, chan_col=chan_col,
+                    scale=scale, dropna_cell=dropna_cell
+                )
             
             if len(nn_df) == 0:
-                # No spots found for this pair
                 results.append({
-                    'chan_a': str(chan_a),
-                    'chan_b': str(chan_b),
-                    'close_spots': 0,
-                    'distant_spots': 0,
-                    'total_spots': 0,
-                    'pct_close': 0.0
+                    'chan_a': str(chan_a), 'chan_b': str(chan_b),
+                    'close_spots': 0, 'distant_spots': 0,
+                    'total_spots': 0, 'pct_close': 0.0
                 })
                 continue
             
-            # Count close and distant spots
             close_spots = (nn_df['nn_dist'] <= distance_threshold).sum()
             distant_spots = (nn_df['nn_dist'] > distance_threshold).sum()
             total_spots = len(nn_df)
             pct_close = (close_spots / total_spots * 100) if total_spots > 0 else 0.0
             
             results.append({
-                'chan_a': str(chan_a),
-                'chan_b': str(chan_b),
-                'close_spots': close_spots,
-                'distant_spots': distant_spots,
-                'total_spots': total_spots,
-                'pct_close': pct_close
+                'chan_a': str(chan_a), 'chan_b': str(chan_b),
+                'close_spots': close_spots, 'distant_spots': distant_spots,
+                'total_spots': total_spots, 'pct_close': pct_close
             })
     
     return pd.DataFrame(results)
@@ -2649,6 +2790,9 @@ def _process_single_round(round_key, ds, distance_threshold, scale, coord_cols, 
         # Load spots for this round with optional ROI filtering
         round_obj = ds.rounds[round_key]
         spots_df = round_obj.load_spots(table_type="mixed", roi_filter_type="strict")
+
+        # only keep these cols
+        spots_df = spots_df[["chan", "cell_id", "z", "y", "x"]]
         
         if len(spots_df) == 0:
             print(f"No spots found for {ds.mouse_id} - {round_key}")
