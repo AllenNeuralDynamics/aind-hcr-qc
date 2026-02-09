@@ -13,6 +13,7 @@ import seaborn as sns
 from aind_hcr_data_loader.hcr_dataset import HCRDataset
 
 import aind_hcr_qc.io.zarr_data as zarr_data
+from aind_hcr_qc.utils.utils import saveable_plot
 
 logger = logging.getLogger(__name__)
 
@@ -545,7 +546,7 @@ def plot_segmentation_overview_single(
     plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0)
     return fig
 
-
+@saveable_plot()
 def plot_single_cell_segmentation_overview(
     dataset, round_n, pyramid_level, plot_channel, plot_cell_id, num_planes=10, view="multi"
 ):
