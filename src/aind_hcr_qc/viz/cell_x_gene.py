@@ -127,7 +127,8 @@ def spot_count_cell_x_gene_coreg(
 # -------------------------------------------------------------------------------------------------
 
 
-def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None,title=None):
+def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None, title=None, 
+                           gene_sort='alphabetical', dataset=None):
     """
     Plot the cell x gene matrix as an image with inverted colormap.
 
@@ -138,10 +139,20 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     clip_range : tuple
         Range to clip the values in the cell x gene matrix.
     sort_gene : str, optional
-        Gene to sort the cell x gene matrix by. If None, sorts by the first gene.
-        Default is None.
+        DEPRECATED: Use gene_sort parameter instead. Gene to sort cells by.
     fig_size : tuple
         Size of the figure to plot.
+    ax : matplotlib axis, optional
+        Axis to plot on. If None, creates new figure.
+    title : str, optional
+        Title for the plot.
+    gene_sort : str, optional
+        How to sort genes (columns). Options:
+        - 'alphabetical' (default): Sort genes A-Z
+        - 'round_channel': Sort by imaging round then channel (requires dataset parameter)
+        - gene name string: Sort cells by expression of that gene
+    dataset : HCRDataset, optional
+        Required if gene_sort='round_channel'. Used to get channel-gene mapping.
 
     """
     if not isinstance(cxg, pd.DataFrame):
@@ -155,10 +166,26 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     cxg = cxg.astype(int)
     cxg = cxg.clip(lower=clip_range[0], upper=clip_range[1])
 
-    # sort by gene if specified
-    if sort_gene is not None and sort_gene not in cxg.columns:
-        raise ValueError(f"Gene '{sort_gene}' not found in cell x gene matrix columns.")
+    # Handle gene column sorting
+    if gene_sort == 'round_channel':
+        if dataset is None:
+            raise ValueError("dataset parameter required when gene_sort='round_channel'")
+        channel_gene_table = dataset.create_channel_gene_table()
+        gene_order = channel_gene_table.sort_values(['Round', 'Channel'])['Gene'].tolist()
+        gene_order = [g for g in gene_order if g in cxg.columns]
+        cxg = cxg[gene_order]
+    elif gene_sort == 'alphabetical':
+        cxg = cxg[sorted(cxg.columns)]
+    elif gene_sort in cxg.columns:
+        # gene_sort is a gene name, sort cells by it
+        cxg = cxg.sort_values(by=gene_sort, ascending=False)
+    elif gene_sort is not None and gene_sort != 'alphabetical':
+        raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
+    
+    # Legacy support for sort_gene parameter
     if sort_gene is not None:
+        if sort_gene not in cxg.columns:
+            raise ValueError(f"Gene '{sort_gene}' not found in cell x gene matrix columns.")
         cxg = cxg.sort_values(by=sort_gene, ascending=False)
     if ax is None:
         fig, ax = plt.subplots(figsize=fig_size)
@@ -193,7 +220,9 @@ def plot_cell_x_gene_clustered(
     add_cluster_labels=True,
     cbar_label="Gene Expression Count",
     title=None,
-    ax=None
+    ax=None,
+    gene_sort='alphabetical',
+    dataset=None
 ):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
@@ -205,8 +234,7 @@ def plot_cell_x_gene_clustered(
     clip_range : tuple
         Range to clip the values in the cell x gene matrix.
     sort_gene : str, optional
-        Gene to sort the cell x gene matrix by. If None, performs clustering instead.
-        Default is None.
+        DEPRECATED: Gene to sort cells by. If None, performs clustering instead.
     fig_size : tuple
         Size of the figure to plot.
     k : int
@@ -214,6 +242,19 @@ def plot_cell_x_gene_clustered(
     add_cluster_labels : bool
         Whether to add green dashed lines and labels to indicate cluster boundaries.
         Default is True.
+    cbar_label : str
+        Label for colorbar.
+    title : str, optional
+        Title for the plot.
+    ax : matplotlib axis, optional
+        Axis to plot on.
+    gene_sort : str, optional
+        How to sort genes (columns). Options:
+        - 'alphabetical' (default): Sort genes A-Z
+        - 'round_channel': Sort by imaging round then channel (requires dataset parameter)
+        - gene name string: Sort cells by expression of that gene
+    dataset : HCRDataset, optional
+        Required if gene_sort='round_channel'. Used to get channel-gene mapping.
 
     Returns
     -------
@@ -235,10 +276,29 @@ def plot_cell_x_gene_clustered(
     cxg = cxg.astype(int)
     cxg = cxg.clip(lower=clip_range[0], upper=clip_range[1])
 
-    # Perform clustering or sorting
-    if sort_gene is not None and sort_gene in cxg.columns:
+    # Handle gene column sorting first (before clustering/sorting rows)
+    if gene_sort == 'round_channel':
+        if dataset is None:
+            raise ValueError("dataset parameter required when gene_sort='round_channel'")
+        channel_gene_table = dataset.create_channel_gene_table()
+        gene_order = channel_gene_table.sort_values(['Round', 'Channel'])['Gene'].tolist()
+        gene_order = [g for g in gene_order if g in cxg.columns]
+        cxg = cxg[gene_order]
+    elif gene_sort == 'alphabetical':
+        cxg = cxg[sorted(cxg.columns)]
+    elif gene_sort in cxg.columns:
+        # gene_sort is a gene name, will be used for cell sorting below
+        pass
+    elif gene_sort is not None and gene_sort != 'alphabetical':
+        raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
+
+    # Perform clustering or sorting (for rows/cells)
+    # Use gene_sort if it's a gene name, otherwise use legacy sort_gene, otherwise cluster
+    cell_sort_gene = gene_sort if gene_sort in cxg.columns else sort_gene
+    
+    if cell_sort_gene is not None and cell_sort_gene in cxg.columns:
         # Sort by specified gene
-        cxg = cxg.sort_values(by=sort_gene, ascending=False)
+        cxg = cxg.sort_values(by=cell_sort_gene, ascending=False)
         cluster_labels = None
         sorted_cell_ids = cxg.index  # Store the sorted cell IDs
     else:
