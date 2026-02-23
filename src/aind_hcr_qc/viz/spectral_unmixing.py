@@ -2882,14 +2882,21 @@ def compute_all_rounds_proximity_stats(
     with Pool(processes=n_processes) as pool:
         results = pool.map(process_func, round_keys)
     
-    # Combine results
-    all_stats = pd.concat([r for r in results if len(r) > 0], ignore_index=True)
-    
-    # Reorder columns for better readability
-    col_order = ['mouse_id', 'round', 'chan_a', 'chan_b', 'close_spots', 
+    # Expected column order for the output DataFrame
+    col_order = ['mouse_id', 'round', 'chan_a', 'chan_b', 'close_spots',
                  'distant_spots', 'total_spots', 'pct_close']
-    all_stats = all_stats[col_order]
-    
+
+    # Filter out empty results before concatenation
+    non_empty_results = [r for r in results if len(r) > 0]
+
+    if non_empty_results:
+        # Combine results
+        all_stats = pd.concat(non_empty_results, ignore_index=True)
+        # Reorder columns for better readability
+        all_stats = all_stats[col_order]
+    else:
+        # No non-empty results; return an empty DataFrame with expected columns
+        all_stats = pd.DataFrame(columns=col_order)
     print(f"\nCompleted all rounds. Total rows: {len(all_stats)}")
     return all_stats
 
