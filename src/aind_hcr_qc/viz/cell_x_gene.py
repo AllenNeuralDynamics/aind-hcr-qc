@@ -373,7 +373,6 @@ def plot_cell_x_gene_clustered(
     return fig, cluster_labels, sorted_cell_ids
 
 
-from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
 @saveable_plot()
