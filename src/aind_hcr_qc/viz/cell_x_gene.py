@@ -451,8 +451,14 @@ def fig_mixed_unmixed_cxg_and_corr(
     # Find optimal k using silhouette score
     def find_optimal_k(data, k_range):
         """Find optimal k using silhouette score."""
+        n_samples = len(data)
+        if n_samples < 2:
+            print(f"Too few samples ({n_samples}) to cluster; using k=1.")
+            return 1
+        max_k = min(k_range[1], n_samples - 1)
+        k_start = min(k_range[0], max_k)
+        k_values = range(k_start, max_k + 1)
         silhouette_scores = []
-        k_values = range(k_range[0], k_range[1] + 1)
         
         for k_val in k_values:
             kmeans = KMeans(n_clusters=k_val, random_state=42, n_init=10)
