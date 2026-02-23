@@ -34,7 +34,7 @@ __all__ = [
     # cell x gene
     "plot_cell_x_gene_simple",
     "plot_cell_x_gene_clustered",
-    "fig_mixed_unmixed_cxg_and_corr"
+    "fig_mixed_unmixed_cxg_and_corr",
     # segmentation
     "qc_segmentation",
     "plot_single_cell_segmentation_overview",
