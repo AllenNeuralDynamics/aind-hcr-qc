@@ -1,12 +1,15 @@
 """Spectral unmixing"""
 
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from scipy.spatial import cKDTree
 
 from aind_hcr_qc.utils import utils
 
@@ -41,7 +44,7 @@ def read_ratios_file(filename):
             row = [float(val) for val in line.strip().split()]
             ratios.append(row)
 
-        return np.array(ratios).T
+        return np.array(ratios)
     except Exception as e:
         print(f"Error reading ratios file: {e}")
         return None
@@ -1752,11 +1755,8 @@ def batch_plot_dye_lines(ds, rounds_list, base_dir):
         output_dir.mkdir(parents=True, exist_ok=True)
         mouse_name = ds.metadata.get("nickname", ds.mouse_id)
 
-        # get filtered spots
-        cell_info = ds.rounds[round_key].get_cell_info(source="mixed_cxg")
-        filt_cell_info = seg.filter_cell_info(cell_info)
-        filt_cell_ids = filt_cell_info.cell_id.unique().tolist()
-        spots_df = ds.rounds[round_key].load_spots(table_type="mixed", filter_cell_ids=filt_cell_ids)
+        # Load filtered spots using roi_filter_type
+        spots_df = ds.rounds[round_key].load_spots(table_type="mixed", roi_filter_type="volume")
 
         # make array of intensities
         intensity_cols = [col for col in spots_df.columns if col.endswith('intensity')]
@@ -1902,5 +1902,1364 @@ def qc_spectral_unmixing(data_dir, output_dir, channels=None, verbose=False):
         print("Spectral unmixing QC completed successfully!")
 
 
-def dummy_func():
-    """Dummy function"""
+# -----------------------------------------------------------------------------------
+# Unique Spot ID Creation
+# -----------------------------------------------------------------------------------
+
+def create_unique_spot_id(spots_df):
+    """
+    Create a unique spot identifier by combining channel and chan_spot_id.
+    
+    Parameters
+    ----------
+    spots_df : pd.DataFrame
+        DataFrame with 'chan' and 'chan_spot_id' columns
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with added 'unique_spot_id' column
+    """
+    spots_df = spots_df.copy()
+    spots_df['unique_spot_id'] = spots_df['chan'].astype(str) + '_' + spots_df['chan_spot_id'].astype(str)
+    return spots_df
+
+
+# -----------------------------------------------------------------------------------
+# Reassignment matrix
+# -----------------------------------------------------------------------------------
+
+def create_reassignment_matrix(unmixed_spots_df, normalize=False):
+    """
+    Create a reassignment matrix showing how spots are reassigned from chan to unmixed_chan.
+    
+    Parameters
+    ----------
+    unmixed_spots_df : pd.DataFrame
+        DataFrame with 'chan' and 'unmixed_chan' columns
+    normalize : bool or str
+        If False, returns raw counts
+        If 'rows', normalize by row (original channel) - shows what % of each original channel went to each unmixed channel
+        If 'cols', normalize by column (unmixed channel) - shows what % of each unmixed channel came from each original channel
+        If 'total', normalize by total count
+    
+    Returns
+    -------
+    pd.DataFrame
+        Matrix where rows are original 'chan' and columns are 'unmixed_chan'
+    """
+    # Create crosstab
+    reassignment_matrix = pd.crosstab(
+        unmixed_spots_df['chan'], 
+        unmixed_spots_df['unmixed_chan'],
+        margins=False
+    )
+    
+    if normalize == 'rows':
+        # Normalize by rows - each row sums to 1 (or 100%)
+        reassignment_matrix = reassignment_matrix.div(reassignment_matrix.sum(axis=1), axis=0)
+    elif normalize == 'cols':
+        # Normalize by columns - each column sums to 1 (or 100%)
+        reassignment_matrix = reassignment_matrix.div(reassignment_matrix.sum(axis=0), axis=1)
+    elif normalize == 'total':
+        # Normalize by total - entire matrix sums to 1 (or 100%)
+        reassignment_matrix = reassignment_matrix / reassignment_matrix.sum().sum()
+    elif normalize is not False:
+        raise ValueError("normalize must be False, 'rows', 'cols', or 'total'")
+    
+    return reassignment_matrix
+
+
+def plot_reassignment_matrix(reassignment_matrix, 
+                            normalize=False,
+                            title="Channel Reassignment Matrix",
+                            figsize=(8, 6),
+                            cmap="YlOrRd",
+                            annot=True,
+                            fmt=None,
+                            label_colors=None,
+                            ax=None,
+                            cbar_label=None,
+                            show_gene_names=False,
+                            chan_gene_map=None):
+    """
+    Plot a heatmap of the reassignment matrix.
+    
+    Parameters
+    ----------
+    reassignment_matrix : pd.DataFrame
+        Matrix from create_reassignment_matrix() with rows as original 'chan' and columns as 'unmixed_chan'
+    normalize : bool or str
+        If the matrix is normalized, affects formatting and colorbar label.
+        Should match the normalize parameter used in create_reassignment_matrix()
+    title : str
+        Title for the plot
+    figsize : tuple
+        Figure size (width, height) if ax is None
+    cmap : str
+        Colormap for the heatmap (default: "YlOrRd")
+    annot : bool
+        Whether to annotate cells with values
+    fmt : str, optional
+        Format string for annotations. If None, auto-detects based on normalize parameter
+    label_colors : dict, optional
+        Dict mapping channel names to colors for axis labels (e.g., {488: '#00FF00', 514: '#FFFF00'})
+    ax : matplotlib.axes.Axes, optional
+        Axis to plot on. If None, creates new figure
+    cbar_label : str, optional
+        Label for colorbar. If None, auto-generates based on normalize parameter
+    show_gene_names : bool, optional
+        If True, show gene names in tick labels instead of just channel numbers
+    chan_gene_map : dict, optional
+        Dict mapping channel numbers to gene names. Required if show_gene_names=True
+    
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+        The axes object with the heatmap
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    
+    # Auto-detect format based on normalization
+    if fmt is None:
+        if normalize in ['rows', 'cols', 'total']:
+            fmt = '.2f'  # Decimal format (e.g., 0.85 instead of 85%)
+        else:
+            fmt = 'g'  # General format for integers
+    
+    # Auto-generate colorbar label
+    if cbar_label is None:
+        if normalize == 'rows':
+            cbar_label = "Fraction of Original Channel"
+        elif normalize == 'cols':
+            cbar_label = "Fraction of Unmixed Channel"
+        elif normalize == 'total':
+            cbar_label = "Fraction of Total Spots"
+        else:
+            cbar_label = "Spot Count"
+    
+    # Create heatmap first with default labels
+    sns.heatmap(
+        reassignment_matrix,
+        annot=annot,
+        fmt=fmt,
+        cmap=cmap,
+        ax=ax,
+        cbar_kws={'label': cbar_label},
+        linewidths=0.5,
+        linecolor='gray'
+    )
+    
+    ax.set_title(title, fontsize=14, pad=10)
+    ax.set_xlabel("Unmixed Channel", fontsize=12)
+    ax.set_ylabel("Original Channel", fontsize=12)
+    
+    # Update tick labels with gene names if requested
+    if show_gene_names and chan_gene_map is not None:
+        # Get the original channel values from the matrix
+        row_channels = reassignment_matrix.index.tolist()
+        col_channels = reassignment_matrix.columns.tolist()
+        
+        # Create new labels with gene names
+        yticklabels = []
+        for chan in row_channels:
+            chan_str = str(chan)
+            # Try both string and int keys
+            gene_name = chan_gene_map.get(chan_str, chan_gene_map.get(int(chan_str) if chan_str.isdigit() else None, str(chan)))
+            yticklabels.append(f"{gene_name}\n{chan}")
+        
+        xticklabels = []
+        for chan in col_channels:
+            chan_str = str(chan)
+            # Try both string and int keys
+            gene_name = chan_gene_map.get(chan_str, chan_gene_map.get(int(chan_str) if chan_str.isdigit() else None, str(chan)))
+            xticklabels.append(f"{gene_name}\n{chan}")
+        
+        ax.set_yticklabels(yticklabels)
+        ax.set_xticklabels(xticklabels)
+    
+    # Color axis labels if colors provided
+    if label_colors is not None:
+        # Get the original channel values to use for color lookup
+        row_channels = reassignment_matrix.index.tolist()
+        col_channels = reassignment_matrix.columns.tolist()
+        
+        for idx, (label, chan) in enumerate(zip(ax.get_yticklabels(), row_channels)):
+            chan_str = str(chan)
+            # Try string key first, then int key
+            if chan_str in label_colors:
+                label.set_color(label_colors[chan_str])
+            elif chan_str.isdigit() and int(chan_str) in label_colors:
+                label.set_color(label_colors[int(chan_str)])
+            label.set_rotation(0)
+            label.set_va('center')
+        
+        for idx, (label, chan) in enumerate(zip(ax.get_xticklabels(), col_channels)):
+            chan_str = str(chan)
+            # Try string key first, then int key
+            if chan_str in label_colors:
+                label.set_color(label_colors[chan_str])
+            elif chan_str.isdigit() and int(chan_str) in label_colors:
+                label.set_color(label_colors[int(chan_str)])
+            label.set_ha('center')
+    
+    plt.tight_layout()
+    return ax
+
+
+def analyze_spot_fate(mixed_spots_df, unmixed_spots_df):
+    """
+    Analyze the fate of spots during unmixing: fixed (same channel), reassigned, or removed.
+    
+    Parameters
+    ----------
+    mixed_spots_df : pd.DataFrame
+        DataFrame with mixed spots, must have 'chan' and 'chan_spot_id' columns
+    unmixed_spots_df : pd.DataFrame
+        DataFrame with unmixed spots, must have 'chan', 'chan_spot_id', and 'unmixed_chan' columns
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns ['original_chan', 'fixed', 'reassigned', 'removed', 'total']
+        where each row represents an original channel and values are spot counts
+    """
+    # Create unique spot IDs
+    mixed_with_uid = create_unique_spot_id(mixed_spots_df)
+    unmixed_with_uid = create_unique_spot_id(unmixed_spots_df)
+    
+    # Get unique spot IDs from both dataframes
+    mixed_spot_ids = set(mixed_with_uid['unique_spot_id'])
+    unmixed_spot_ids = set(unmixed_with_uid['unique_spot_id'])
+    
+    # Removed spots: in mixed but not in unmixed
+    removed_spot_ids = mixed_spot_ids - unmixed_spot_ids
+    
+    # Analyze fate by original channel
+    fate_data = []
+    
+    for chan in sorted(mixed_with_uid['chan'].unique()):
+        # Get all spots from this channel in mixed data
+        chan_mixed_spots = mixed_with_uid[mixed_with_uid['chan'] == chan]
+        chan_spot_ids = set(chan_mixed_spots['unique_spot_id'])
+        
+        # Count removed spots from this channel
+        removed_from_chan = len(chan_spot_ids & removed_spot_ids)
+        
+        # Get spots from this channel that survived unmixing
+        survived_spot_ids = chan_spot_ids - removed_spot_ids
+        survived_spots = unmixed_with_uid[unmixed_with_uid['unique_spot_id'].isin(survived_spot_ids)]
+        
+        # Count fixed (stayed in same channel) vs reassigned (moved to different channel)
+        fixed_count = len(survived_spots[survived_spots['unmixed_chan'] == chan])
+        reassigned_count = len(survived_spots[survived_spots['unmixed_chan'] != chan])
+        
+        total = len(chan_spot_ids)
+        
+        fate_data.append({
+            'original_chan': str(chan),
+            'fixed': fixed_count,
+            'reassigned': reassigned_count,
+            'removed': removed_from_chan,
+            'total': total
+        })
+    
+    fate_df = pd.DataFrame(fate_data)
+    return fate_df
+
+
+def plot_spot_fate(fate_df, 
+                  title="Spot Fate During Unmixing",
+                  figsize=(10, 6),
+                  label_colors=None,
+                  ax=None,
+                  show_percentages=True):
+    """
+    Plot stacked bar chart showing the fate of spots from each channel during unmixing.
+    
+    Parameters
+    ----------
+    fate_df : pd.DataFrame
+        DataFrame from analyze_spot_fate() with columns ['original_chan', 'fixed', 'reassigned', 'removed', 'total']
+    title : str
+        Title for the plot
+    figsize : tuple
+        Figure size (width, height) if ax is None
+    label_colors : dict, optional
+        Dict mapping channel names to colors for x-axis labels
+    ax : matplotlib.axes.Axes, optional
+        Axis to plot on. If None, creates new figure
+    show_percentages : bool
+        If True, show percentages in addition to counts
+    
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+        The axes object with the plot
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    
+    # Prepare data for stacking
+    channels = fate_df['original_chan'].values
+    fixed = fate_df['fixed'].values
+    reassigned = fate_df['reassigned'].values
+    removed = fate_df['removed'].values
+    total = fate_df['total'].values
+    
+    x = np.arange(len(channels))
+    width = 0.7
+    
+    # Create stacked bars
+    colors_fate = {
+        'fixed': '#2ecc71',      # Green
+        'reassigned': '#f39c12',  # Orange
+        'removed': '#e74c3c'      # Red
+    }
+    
+    p1 = ax.bar(x, fixed, width, label='Fixed', color=colors_fate['fixed'])
+    p2 = ax.bar(x, reassigned, width, bottom=fixed, label='Reassigned', color=colors_fate['reassigned'])
+    p3 = ax.bar(x, removed, width, bottom=fixed+reassigned, label='Removed', color=colors_fate['removed'])
+    
+    # Add value labels on bars
+    if show_percentages:
+        for i, (f, r, rm, t) in enumerate(zip(fixed, reassigned, removed, total)):
+            # Fixed percentage
+            if f > 0:
+                pct = f / t * 100
+                y_pos = f / 2
+                ax.text(i, y_pos, f'{pct:.1f}%', ha='center', va='center', 
+                       fontsize=9, fontweight='bold', color='white')
+            
+            # Reassigned percentage
+            if r > 0:
+                pct = r / t * 100
+                y_pos = f + r / 2
+                ax.text(i, y_pos, f'{pct:.1f}%', ha='center', va='center', 
+                       fontsize=9, fontweight='bold', color='white')
+            
+            # Removed percentage
+            if rm > 0:
+                pct = rm / t * 100
+                y_pos = f + r + rm / 2
+                ax.text(i, y_pos, f'{pct:.1f}%', ha='center', va='center', 
+                       fontsize=9, fontweight='bold', color='white')
+    
+    ax.set_xlabel('Original Channel', fontsize=12)
+    ax.set_ylabel('Number of Spots', fontsize=12)
+    ax.set_title(title, fontsize=14, pad=10)
+    ax.set_xticks(x)
+    ax.set_xticklabels(channels)
+    ax.legend(loc='upper right')
+    
+    # Color x-axis labels if colors provided
+    if label_colors is not None:
+        for i, label in enumerate(ax.get_xticklabels()):
+            chan = label.get_text()
+            if chan in label_colors:
+                label.set_color(label_colors[chan])
+    
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    plt.tight_layout()
+    return ax
+
+
+@saveable_plot()
+def fig_unmixing_comprehensive(ds, round_name, mixed_spots_df, unmixed_spots_df,
+                                color_map=None, 
+                                ch_dye_map=None,
+                                figsize=(18, 5)):
+    """
+    Create a comprehensive 3-panel figure showing:
+    1. Ratios matrix (spectral unmixing coefficients)
+    2. Reassignment matrix (how spots move between channels)
+    3. Spot fate bar plot (fixed/reassigned/removed)
+    
+    Parameters
+    ----------
+    ds : HCRDataset
+        Dataset object
+    round_name : str
+        Round name (e.g., 'R5')
+    mixed_spots_df : pd.DataFrame
+        Mixed spots dataframe for the round
+    unmixed_spots_df : pd.DataFrame
+        Unmixed spots dataframe for the round
+    color_map : dict, optional
+        Dict mapping channel names to colors (defaults to Z1_CHANNEL_CMAP_SOFT)
+    ch_dye_map : dict, optional
+        Dict mapping channel numbers to dye names
+    figsize : tuple
+        Figure size (width, height)
+    
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    axes : np.ndarray
+        Array of 3 axes
+    fate_df : pd.DataFrame
+        Spot fate analysis dataframe
+    """
+    if color_map is None:
+        color_map = constants.Z1_CHANNEL_CMAP_SOFT
+    
+    if ch_dye_map is None:
+        ch_dye_map = {488: "AF488", 514: "AF514", 561: "AF546", 594: "AF594", 638: "AF647"}
+    
+    sns.set(font_scale=1.2)
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+    # filter spots to the given round
+    mixed_spots_df = mixed_spots_df[mixed_spots_df['round'] == round_name]
+    unmixed_spots_df = unmixed_spots_df[unmixed_spots_df['round'] == round_name]
+    
+    # ---------------------------
+    # Panel 1: Ratios Matrix
+    # ---------------------------
+    rd = ds.rounds[round_name]
+    spot_ch = rd.get_spot_channel_gene_map()
+    rf = rd.spot_files.ratios_file
+    
+    if rf is not None:
+        ratios = read_ratios_file(rf)
+        col_names = list(spot_ch.keys())
+        row_names = [ch_dye_map.get(int(ch), ch) for ch in spot_ch.keys()]
+        colors = [color_map[ch] for ch in spot_ch.keys()]
+        
+        # Plot ratios heatmap
+        matrix = np.array(ratios)
+        sns.heatmap(matrix, annot=True, cmap="Greys", fmt="g",
+                    xticklabels=col_names, yticklabels=row_names, ax=axes[0])
+        axes[0].set_title(f"Unmixing Ratios\n{round_name}", fontsize=14, pad=10)
+        axes[0].set_xlabel("Camera channel")
+        axes[0].set_ylabel("Dye")
+        
+        # Color and center-justify tick labels
+        for idx, label in enumerate(axes[0].get_yticklabels()):
+            if idx < len(colors):
+                label.set_color(colors[idx])
+            label.set_va('center')
+            label.set_rotation(0)
+        
+        for idx, label in enumerate(axes[0].get_xticklabels()):
+            if idx < len(colors):
+                label.set_color(colors[idx])
+            label.set_ha('center')
+    else:
+        axes[0].text(0.5, 0.5, 'No ratios file found', ha='center', va='center')
+        axes[0].set_title(f"Unmixing Ratios\n{round_name}")
+        axes[0].set_xticks([])
+        axes[0].set_yticks([])
+    
+    # ---------------------------
+    # Panel 2: Reassignment Matrix
+    # ---------------------------
+    reassignment_matrix = create_reassignment_matrix(unmixed_spots_df, normalize='rows')
+    plot_reassignment_matrix(
+        reassignment_matrix,
+        normalize='rows',
+        title=f"Reassignment Matrix\n{round_name}",
+        label_colors=color_map,
+        ax=axes[1],
+        cmap="YlOrRd",
+        show_gene_names=True,
+        chan_gene_map=spot_ch
+    )
+    
+    # ---------------------------
+    # Panel 3: Spot Fate
+    # ---------------------------
+    fate_df = analyze_spot_fate(mixed_spots_df, unmixed_spots_df)
+    plot_spot_fate(
+        fate_df,
+        title=f"Spot Fate\n{round_name}",
+        label_colors=color_map,
+        ax=axes[2],
+        show_percentages=True
+    )
+    
+    # Overall title
+    mouse_name = ds.metadata.get("nickname", ds.mouse_id)
+    genotype_short = ds.metadata.get("genotype_short", "")
+    suptitle = f"{mouse_name} ({genotype_short}) - {round_name} Unmixing Analysis".strip()
+    fig.suptitle(suptitle, fontsize=16, y=1.02)
+    
+    plt.tight_layout()
+    return fig, axes, fate_df
+
+
+# ---
+# Analysis of unmixing issues
+# ---
+
+
+
+
+def cross_channel_nn(
+    spots_df: pd.DataFrame,
+    chan_a,
+    chan_b,
+    coord_cols=("z", "y", "x"),
+    cell_col="cell_id",
+    chan_col="chan",
+    scale=(1.0, 1.0, 1.0),   # e.g. (z_um_per_vox, y_um_per_px, x_um_per_px) to handle anisotropy
+    dropna_cell=True,
+) -> pd.DataFrame:
+    """
+    Compute cross-channel nearest-neighbor distances A->B and B->A within each cell.
+
+    Returns a tidy DataFrame with one row per query spot (in A or B):
+      - query_index: original index in spots_df
+      - query_chan: A or B
+      - nn_index: index of nearest neighbor spot in the other channel (same cell)
+      - nn_dist: Euclidean distance in scaled coordinate units
+      - cell_id: cell id
+    """
+    df = spots_df.copy()
+
+    # Normalize channel dtype for matching
+    df[chan_col] = df[chan_col].astype(str)
+    chan_a = str(chan_a)
+    chan_b = str(chan_b)
+
+    if dropna_cell:
+        df = df[df[cell_col].notna()]
+
+    # Pre-scale coordinates (handles anisotropic z)
+    coords = df.loc[:, coord_cols].to_numpy(dtype=float)
+    scale = np.asarray(scale, dtype=float)
+    if scale.shape != (len(coord_cols),):
+        raise ValueError(f"`scale` must have length {len(coord_cols)}")
+    coords_scaled = coords * scale[None, :]
+
+    # Split A and B
+    is_a = df[chan_col] == chan_a
+    is_b = df[chan_col] == chan_b
+
+    df_a = df[is_a]
+    df_b = df[is_b]
+
+    # Early exit if empty
+    if len(df_a) == 0 or len(df_b) == 0:
+        print(f"Empty DataFrame: df_a: {len(df_a)}, df_b: {len(df_b)}")
+        return pd.DataFrame(columns=["query_index","query_chan","nn_index","nn_dist",cell_col])
+
+    # We'll look within each cell separately
+    out_rows = []
+    for cell_id, group in df.groupby(cell_col, sort=False):
+        a_idx = group.index[group[chan_col] == chan_a].to_numpy()
+        b_idx = group.index[group[chan_col] == chan_b].to_numpy()
+        if len(a_idx) == 0 or len(b_idx) == 0:
+            continue
+
+        a_pts = coords_scaled[df.index.get_indexer(a_idx)]
+        b_pts = coords_scaled[df.index.get_indexer(b_idx)]
+
+        # A -> B
+        tree_b = cKDTree(b_pts)
+        dists_ab, nnpos_ab = tree_b.query(a_pts, k=1)
+        nn_idx_ab = b_idx[nnpos_ab]
+        out_rows.extend(
+            (qi, chan_a, ni, float(di), cell_id)
+            for qi, ni, di in zip(a_idx, nn_idx_ab, dists_ab)
+        )
+
+        # B -> A
+        tree_a = cKDTree(a_pts)
+        dists_ba, nnpos_ba = tree_a.query(b_pts, k=1)
+        nn_idx_ba = a_idx[nnpos_ba]
+        out_rows.extend(
+            (qi, chan_b, ni, float(di), cell_id)
+            for qi, ni, di in zip(b_idx, nn_idx_ba, dists_ba)
+        )
+
+    return pd.DataFrame(
+        out_rows,
+        columns=["query_index", "query_chan", "nn_index", "nn_dist", cell_col]
+    )
+
+def cross_channel_nn_gpu(
+    spots_df: pd.DataFrame,
+    chan_a,
+    chan_b,
+    coord_cols=("z", "y", "x"),
+    cell_col="cell_id",
+    chan_col="chan",
+    scale=(1.0, 1.0, 1.0),
+    dropna_cell=True,
+    device='cuda',
+    batch_size=50000,  # Process cells in batches to manage GPU memory
+) -> pd.DataFrame:
+    """
+    GPU-accelerated cross-channel nearest-neighbor distances using PyTorch.
+    
+    Parameters
+    ----------
+    device : str
+        'cuda' for GPU, 'cpu' for CPU fallback
+    batch_size : int
+        Number of spots to process at once on GPU (reduce if OOM)
+    """
+    try:
+        import torch
+    except ImportError as e:
+        raise ImportError(
+            "PyTorch is required for cross_channel_nn_gpu. "
+            "Install it with: pip install torch"
+        ) from e
+    df = spots_df.copy()
+    
+    # Normalize channel dtype
+    df[chan_col] = df[chan_col].astype(str)
+    chan_a = str(chan_a)
+    chan_b = str(chan_b)
+    
+    if dropna_cell:
+        df = df[df[cell_col].notna()]
+    
+    # Check if CUDA is available
+    if device == 'cuda' and not torch.cuda.is_available():
+        print("CUDA not available, falling back to CPU")
+        device = 'cpu'
+    
+    # Pre-scale coordinates
+    coords = df.loc[:, coord_cols].to_numpy(dtype=np.float32)  # float32 for GPU efficiency
+    scale = np.asarray(scale, dtype=np.float32)
+    if scale.shape != (len(coord_cols),):
+        raise ValueError(f"`scale` must have length {len(coord_cols)}")
+    coords_scaled = coords * scale[None, :]
+    
+    # Convert to torch tensor on GPU
+    coords_tensor = torch.from_numpy(coords_scaled).to(device)
+    
+    # Split A and B
+    is_a = df[chan_col] == chan_a
+    is_b = df[chan_col] == chan_b
+    
+    df_a = df[is_a]
+    df_b = df[is_b]
+    
+    # Early exit if empty
+    if len(df_a) == 0 or len(df_b) == 0:
+        print(f"Empty DataFrame: df_a: {len(df_a)}, df_b: {len(df_b)}")
+        return pd.DataFrame(columns=["query_index","query_chan","nn_index","nn_dist",cell_col])
+    
+    out_rows = []
+    
+    # Process each cell
+    for cell_id, group in df.groupby(cell_col, sort=False):
+        a_idx = group.index[group[chan_col] == chan_a].to_numpy()
+        b_idx = group.index[group[chan_col] == chan_b].to_numpy()
+        
+        if len(a_idx) == 0 or len(b_idx) == 0:
+            continue
+        
+        # Get indices in the tensor
+        a_tensor_idx = df.index.get_indexer(a_idx)
+        b_tensor_idx = df.index.get_indexer(b_idx)
+        
+        a_pts = coords_tensor[a_tensor_idx]  # Shape: (n_a, 3)
+        b_pts = coords_tensor[b_tensor_idx]  # Shape: (n_b, 3)
+        
+        # A -> B: Find nearest B for each A
+        # Use batched distance computation to avoid OOM
+        n_a = len(a_pts)
+        n_b = len(b_pts)
+        
+        if n_a * n_b < batch_size * batch_size:
+            # Small enough to compute all at once
+            # Shape: (n_a, n_b)
+            dists_ab = torch.cdist(a_pts, b_pts, p=2)
+            nn_dists_ab, nn_idx_ab = torch.min(dists_ab, dim=1)
+            
+            # Convert back to CPU and numpy
+            nn_dists_ab = nn_dists_ab.cpu().numpy()
+            nn_idx_ab = nn_idx_ab.cpu().numpy()
+        else:
+            # Process in batches
+            nn_dists_ab = []
+            nn_idx_ab = []
+            
+            for i in range(0, n_a, batch_size):
+                end_i = min(i + batch_size, n_a)
+                batch_a = a_pts[i:end_i]
+                
+                # Compute distances for this batch
+                dists_batch = torch.cdist(batch_a, b_pts, p=2)
+                nn_dists_batch, nn_idx_batch = torch.min(dists_batch, dim=1)
+                
+                nn_dists_ab.append(nn_dists_batch.cpu().numpy())
+                nn_idx_ab.append(nn_idx_batch.cpu().numpy())
+                
+                # Clear GPU cache
+                del dists_batch, nn_dists_batch, nn_idx_batch
+                if device == 'cuda':
+                    torch.cuda.empty_cache()
+            
+            nn_dists_ab = np.concatenate(nn_dists_ab)
+            nn_idx_ab = np.concatenate(nn_idx_ab)
+        
+        nn_actual_idx_ab = b_idx[nn_idx_ab]
+        out_rows.extend(
+            (qi, chan_a, ni, float(di), cell_id)
+            for qi, ni, di in zip(a_idx, nn_actual_idx_ab, nn_dists_ab)
+        )
+        
+        # B -> A: Find nearest A for each B
+        if n_a * n_b < batch_size * batch_size:
+            dists_ba = torch.cdist(b_pts, a_pts, p=2)
+            nn_dists_ba, nn_idx_ba = torch.min(dists_ba, dim=1)
+            
+            nn_dists_ba = nn_dists_ba.cpu().numpy()
+            nn_idx_ba = nn_idx_ba.cpu().numpy()
+        else:
+            nn_dists_ba = []
+            nn_idx_ba = []
+            
+            for i in range(0, n_b, batch_size):
+                end_i = min(i + batch_size, n_b)
+                batch_b = b_pts[i:end_i]
+                
+                dists_batch = torch.cdist(batch_b, a_pts, p=2)
+                nn_dists_batch, nn_idx_batch = torch.min(dists_batch, dim=1)
+                
+                nn_dists_ba.append(nn_dists_batch.cpu().numpy())
+                nn_idx_ba.append(nn_idx_batch.cpu().numpy())
+                
+                del dists_batch, nn_dists_batch, nn_idx_batch
+                if device == 'cuda':
+                    torch.cuda.empty_cache()
+            
+            nn_dists_ba = np.concatenate(nn_dists_ba)
+            nn_idx_ba = np.concatenate(nn_idx_ba)
+        
+        nn_actual_idx_ba = a_idx[nn_idx_ba]
+        out_rows.extend(
+            (qi, chan_b, ni, float(di), cell_id)
+            for qi, ni, di in zip(b_idx, nn_actual_idx_ba, nn_dists_ba)
+        )
+    
+    return pd.DataFrame(
+        out_rows,
+        columns=["query_index", "query_chan", "nn_index", "nn_dist", cell_col]
+    )
+
+def compute_channel_pair_proximity_stats(
+    nn_df: pd.DataFrame,
+    distance_threshold: float = 1.0,
+) -> pd.DataFrame:
+    """
+    For a DataFrame with nearest neighbor distances already computed, 
+    compute the number of close and distant spots for each channel pair.
+    
+    Parameters:
+    -----------
+    nn_df : pd.DataFrame
+        DataFrame with nearest neighbor data, must contain columns:
+        - 'query_chan': channel of the query spot
+        - 'nn_dist': nearest neighbor distance
+        Expected to be output from cross_channel_nn() function
+    distance_threshold : float
+        Distance threshold to separate close vs distant spots
+    
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with columns: ['chan_pair', 'close_spots', 'distant_spots', 'total_spots', 'pct_close']
+        where chan_pair shows the two channels (e.g., "488→514")
+    """
+    if 'query_chan' not in nn_df.columns or 'nn_dist' not in nn_df.columns:
+        raise ValueError("nn_df must contain 'query_chan' and 'nn_dist' columns")
+    
+    # Count close and distant spots
+    close_spots = (nn_df['nn_dist'] <= distance_threshold).sum()
+    distant_spots = (nn_df['nn_dist'] > distance_threshold).sum()
+    total_spots = len(nn_df)
+    pct_close = (close_spots / total_spots * 100) if total_spots > 0 else 0.0
+    
+    # Try to infer channel pair from the data
+    unique_chans = sorted(nn_df['query_chan'].unique())
+    if len(unique_chans) == 2:
+        chan_pair = f"{unique_chans[0]}→{unique_chans[1]}"
+    else:
+        chan_pair = "multiple"
+    
+    results = {
+        'chan_pair': chan_pair,
+        'close_spots': close_spots,
+        'distant_spots': distant_spots,
+        'total_spots': total_spots,
+        'pct_close': pct_close
+    }
+    
+    return pd.DataFrame([results])
+
+
+def compute_all_channel_pair_proximity_stats(
+    spots_df: pd.DataFrame,
+    distance_threshold: float = 1.0,
+    coord_cols=("z", "y", "x"),
+    cell_col="cell_id",
+    chan_col="chan",
+    scale=(1.0, 1.0, 1.0),
+    dropna_cell=True,
+    use_gpu=False,  # NEW: enable GPU acceleration
+    device='cuda',
+    batch_size=100000,
+) -> pd.DataFrame:
+    """
+    Compute proximity stats for all channel pairs with optional GPU acceleration.
+    
+    Parameters
+    ----------
+    use_gpu : bool
+        If True, use GPU-accelerated version (requires PyTorch + CUDA)
+    device : str
+        'cuda' for GPU, 'cpu' for CPU
+    batch_size : int
+        Batch size for GPU processing
+    """
+    channels = sorted(spots_df[chan_col].unique())
+    results = []
+    
+    # Choose NN function based on GPU availability
+    nn_func = cross_channel_nn_gpu if use_gpu else cross_channel_nn
+    
+    for i, chan_a in enumerate(channels):
+        for chan_b in channels[i+1:]:
+            if use_gpu:
+                nn_df = nn_func(
+                    spots_df, chan_a=chan_a, chan_b=chan_b,
+                    coord_cols=coord_cols, cell_col=cell_col, chan_col=chan_col,
+                    scale=scale, dropna_cell=dropna_cell,
+                    device=device, batch_size=batch_size
+                )
+            else:
+                nn_df = nn_func(
+                    spots_df, chan_a=chan_a, chan_b=chan_b,
+                    coord_cols=coord_cols, cell_col=cell_col, chan_col=chan_col,
+                    scale=scale, dropna_cell=dropna_cell
+                )
+            
+            if len(nn_df) == 0:
+                results.append({
+                    'chan_a': str(chan_a), 'chan_b': str(chan_b),
+                    'close_spots': 0, 'distant_spots': 0,
+                    'total_spots': 0, 'pct_close': 0.0
+                })
+                continue
+            
+            close_spots = (nn_df['nn_dist'] <= distance_threshold).sum()
+            distant_spots = (nn_df['nn_dist'] > distance_threshold).sum()
+            total_spots = len(nn_df)
+            pct_close = (close_spots / total_spots * 100) if total_spots > 0 else 0.0
+            
+            results.append({
+                'chan_a': str(chan_a), 'chan_b': str(chan_b),
+                'close_spots': close_spots, 'distant_spots': distant_spots,
+                'total_spots': total_spots, 'pct_close': pct_close
+            })
+    
+    return pd.DataFrame(results)
+
+
+def _process_single_round(round_key, ds, distance_threshold, scale, coord_cols, cell_col, chan_col, dropna_cell):
+    """
+    Helper function to process a single round for multiprocessing.
+    
+    Parameters:
+    -----------
+    round_key : str
+        Round identifier (e.g., 'R1', 'R2')
+    ds : HCRDataset
+        Dataset object
+    distance_threshold : float
+        Distance threshold for proximity
+    scale : tuple
+        Scaling factors for coordinates
+    coord_cols : tuple
+        Column names for coordinates
+    cell_col : str
+        Column name for cell IDs
+    chan_col : str
+        Column name for channel labels
+    dropna_cell : bool
+        Whether to drop spots without cell assignments
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Proximity stats for all channel pairs in this round
+    """
+    try:
+        # Load spots for this round with optional ROI filtering
+        round_obj = ds.rounds[round_key]
+        spots_df = round_obj.load_spots(table_type="mixed", roi_filter_type="strict")
+
+        # only keep these cols
+        spots_df = spots_df[["chan", "cell_id", "z", "y", "x"]]
+        
+        if len(spots_df) == 0:
+            print(f"No spots found for {ds.mouse_id} - {round_key}")
+            return pd.DataFrame()
+        
+        # Compute stats for all channel pairs
+        stats_df = compute_all_channel_pair_proximity_stats(
+            spots_df,
+            distance_threshold=distance_threshold,
+            coord_cols=coord_cols,
+            cell_col=cell_col,
+            chan_col=chan_col,
+            scale=scale,
+            dropna_cell=dropna_cell,
+        )
+        
+        # Add round and mouse_id columns
+        stats_df['round'] = round_key
+        stats_df['mouse_id'] = ds.mouse_id
+        
+        print(f"Completed {ds.mouse_id} - {round_key}: {len(stats_df)} channel pairs")
+        return stats_df
+        
+    except Exception as e:
+        print(f"Error processing {ds.mouse_id} - {round_key}: {e}")
+        return pd.DataFrame()
+
+
+def compute_all_rounds_proximity_stats(
+    ds,
+    distance_threshold: float = 1.0,
+    coord_cols=("z", "y", "x"),
+    cell_col="cell_id",
+    chan_col="chan",
+    scale=(1.0, 0.24, 0.24),
+    dropna_cell=True,
+    n_processes=None,
+) -> pd.DataFrame:
+    """
+    Compute proximity stats for all rounds in a dataset using multiprocessing.
+    
+    Parameters:
+    -----------
+    ds : HCRDataset
+        Dataset object with multiple rounds
+    distance_threshold : float
+        Distance threshold to separate close vs distant spots
+    coord_cols : tuple
+        Column names for coordinates
+    cell_col : str
+        Column name for cell IDs
+    chan_col : str
+        Column name for channel labels
+    scale : tuple
+        Scaling factors for (z, y, x) coordinates
+    dropna_cell : bool
+        Whether to drop spots without cell assignments
+    n_processes : int, optional
+        Number of processes to use. If None, uses cpu_count() - 1
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Combined DataFrame with proximity stats for all rounds
+        Columns: ['mouse_id', 'round', 'chan_a', 'chan_b', 'close_spots', 
+                  'distant_spots', 'total_spots', 'pct_close']
+    """
+    if n_processes is None:
+        n_processes = max(1, cpu_count() - 1)
+    
+    round_keys = list(ds.rounds.keys())
+    print(f"Processing {len(round_keys)} rounds for {ds.mouse_id} using {n_processes} processes")
+    
+    # Create partial function with fixed parameters
+    process_func = partial(
+        _process_single_round,
+        ds=ds,
+        distance_threshold=distance_threshold,
+        scale=scale,
+        coord_cols=coord_cols,
+        cell_col=cell_col,
+        chan_col=chan_col,
+        dropna_cell=dropna_cell,
+    )
+    
+    # Process rounds in parallel
+    with Pool(processes=n_processes) as pool:
+        results = pool.map(process_func, round_keys)
+    
+    # Expected column order for the output DataFrame
+    col_order = ['mouse_id', 'round', 'chan_a', 'chan_b', 'close_spots',
+                 'distant_spots', 'total_spots', 'pct_close']
+
+    # Filter out empty results before concatenation
+    non_empty_results = [r for r in results if len(r) > 0]
+
+    if non_empty_results:
+        # Combine results
+        all_stats = pd.concat(non_empty_results, ignore_index=True)
+        # Reorder columns for better readability
+        all_stats = all_stats[col_order]
+    else:
+        # No non-empty results; return an empty DataFrame with expected columns
+        all_stats = pd.DataFrame(columns=col_order)
+    print(f"\nCompleted all rounds. Total rows: {len(all_stats)}")
+    return all_stats
+
+
+@saveable_plot()
+def plot_proximity_stats_heatmap(
+    proximity_stats: pd.DataFrame,
+    metric='pct_close',
+    figsize=(6, 4),
+    cmap='BuPu',
+    vmin=None,
+    vmax=None,
+    annot=True,
+    fmt='.1f',
+    title=None,
+    highlight_adjacent=True,
+):
+    """
+    Plot a heatmap of proximity statistics across rounds and channel pairs.
+    
+    Parameters:
+    -----------
+    proximity_stats : pd.DataFrame
+        DataFrame from compute_all_rounds_proximity_stats() with columns:
+        ['mouse_id', 'round', 'chan_a', 'chan_b', 'close_spots', 'distant_spots', 'total_spots', 'pct_close']
+    metric : str
+        Which metric to plot ('pct_close', 'close_spots', 'distant_spots', or 'total_spots')
+    figsize : tuple
+        Figure size (width, height)
+    cmap : str
+        Colormap for the heatmap (default: 'RdYlGn' - red for low, green for high)
+    vmin : float, optional
+        Minimum value for colormap
+    vmax : float, optional
+        Maximum value for colormap
+    annot : bool
+        Whether to annotate cells with values
+    fmt : str
+        Format string for annotations
+    title : str, optional
+        Custom title for the plot
+    highlight_adjacent : bool
+        If True, highlight adjacent channel pairs (488→514, 514→561, etc.) with bold text and star marker
+    
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        The figure object
+    """
+    # Define adjacent channel pairs
+    adjacent_pairs = [
+        ('488', '514'),
+        ('514', '561'),
+        ('561', '594'),
+        ('594', '638')
+    ]
+    
+    # Create channel pair label with optional marker for adjacent pairs
+    proximity_stats = proximity_stats.copy()
+    
+    def create_pair_label(row):
+        pair = (row['chan_a'], row['chan_b'])
+        label = f"{row['chan_a']}→{row['chan_b']}"
+        if highlight_adjacent and pair in adjacent_pairs:
+            label = f"★ {label}"  # Add star marker for adjacent pairs
+        return label
+    
+    proximity_stats['chan_pair'] = proximity_stats.apply(create_pair_label, axis=1)
+    
+    # Pivot to create heatmap data
+    heatmap_data = proximity_stats.pivot(
+        index='chan_pair',
+        columns='round',
+        values=metric
+    )
+    
+    # Sort rounds naturally (R1, R2, R3, etc.)
+    round_cols = sorted(heatmap_data.columns, key=lambda x: int(x.replace('R', '')))
+    heatmap_data = heatmap_data[round_cols]
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Create heatmap
+    sns.heatmap(
+        heatmap_data,
+        annot=annot,
+        fmt=fmt,
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        ax=ax,
+        cbar_kws={'label': metric.replace('_', ' ').title()},
+        linewidths=0.5,
+        linecolor='gray'
+    )
+    
+    # Highlight adjacent channel pairs with bold and colored y-axis labels
+    if highlight_adjacent:
+        for idx, label in enumerate(ax.get_yticklabels()):
+            text = label.get_text()
+            if text.startswith('★'):
+                label.set_weight('bold')
+                label.set_color('#2E86AB')  # Blue color for adjacent pairs
+                label.set_fontsize(11)
+    
+    # Set title
+    if title is None:
+        mouse_id = proximity_stats['mouse_id'].iloc[0] if 'mouse_id' in proximity_stats.columns else ''
+        metric_label = metric.replace('_', ' ').title()
+        title = f"{mouse_id} - Cross-Channel Proximity: {metric_label}"
+        if highlight_adjacent:
+            title += "\n(★ = Adjacent channel pairs)"
+    
+    ax.set_title(title, fontsize=14, pad=10)
+    ax.set_xlabel("Round", fontsize=12)
+    ax.set_ylabel("Channel Pair", fontsize=12)
+    
+    plt.tight_layout()
+    return fig
+
+
+@saveable_plot()
+def plot_proximity_stats_comparison(
+    proximity_stats: pd.DataFrame,
+    metric='pct_close',
+    figsize=(14, 6),
+    plot_type='both',  # 'heatmap', 'bar', or 'both'
+):
+    """
+    Create comparison plots for proximity statistics.
+    
+    Parameters:
+    -----------
+    proximity_stats : pd.DataFrame
+        DataFrame from compute_all_rounds_proximity_stats()
+    metric : str
+        Which metric to plot ('pct_close', 'close_spots', etc.)
+    figsize : tuple
+        Figure size (width, height)
+    plot_type : str
+        Type of plot: 'heatmap', 'bar', or 'both'
+    
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        The figure object
+    """
+    proximity_stats = proximity_stats.copy()
+    proximity_stats['chan_pair'] = proximity_stats['chan_a'] + '→' + proximity_stats['chan_b']
+    
+    if plot_type == 'both':
+        fig, axes = plt.subplots(1, 2, figsize=figsize)
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(figsize[0]//2 if plot_type != 'heatmap' else figsize[0], figsize[1]))
+        axes = [ax]
+    
+    mouse_id = proximity_stats['mouse_id'].iloc[0] if 'mouse_id' in proximity_stats.columns else ''
+    
+    if plot_type in ['heatmap', 'both']:
+        # Heatmap view
+        ax_idx = 0 if plot_type == 'both' else 0
+        heatmap_data = proximity_stats.pivot(
+            index='chan_pair',
+            columns='round',
+            values=metric
+        )
+        round_cols = sorted(heatmap_data.columns, key=lambda x: int(x.replace('R', '')))
+        heatmap_data = heatmap_data[round_cols]
+        
+        sns.heatmap(
+            heatmap_data,
+            annot=True,
+            fmt='.1f',
+            cmap='BuPu',
+            ax=axes[ax_idx],
+            cbar_kws={'label': metric.replace('_', ' ').title()},
+            linewidths=0.5,
+            linecolor='gray'
+        )
+        axes[ax_idx].set_title(f"Heatmap: {metric.replace('_', ' ').title()}", fontsize=12)
+        axes[ax_idx].set_xlabel("Round", fontsize=10)
+        axes[ax_idx].set_ylabel("Channel Pair", fontsize=10)
+    
+    if plot_type in ['bar', 'both']:
+        # Grouped bar chart view
+        ax_idx = 1 if plot_type == 'both' else 0
+        
+        # Prepare data for grouped bar chart
+        rounds = sorted(proximity_stats['round'].unique(), key=lambda x: int(x.replace('R', '')))
+        chan_pairs = sorted(proximity_stats['chan_pair'].unique())
+        
+        x = np.arange(len(chan_pairs))
+        width = 0.8 / len(rounds)
+        
+        for i, round_key in enumerate(rounds):
+            round_data = proximity_stats[proximity_stats['round'] == round_key].set_index('chan_pair')
+            values = [round_data.loc[cp, metric] if cp in round_data.index else 0 for cp in chan_pairs]
+            axes[ax_idx].bar(x + i * width, values, width, label=round_key, alpha=0.8)
+        
+        axes[ax_idx].set_xlabel('Channel Pair', fontsize=10)
+        axes[ax_idx].set_ylabel(metric.replace('_', ' ').title(), fontsize=10)
+        axes[ax_idx].set_title(f"Bar Chart: {metric.replace('_', ' ').title()}", fontsize=12)
+        axes[ax_idx].set_xticks(x + width * (len(rounds) - 1) / 2)
+        axes[ax_idx].set_xticklabels(chan_pairs, rotation=45, ha='right')
+        axes[ax_idx].legend(title='Round', bbox_to_anchor=(1.05, 1), loc='upper left')
+        axes[ax_idx].grid(axis='y', alpha=0.3)
+    
+    fig.suptitle(f"{mouse_id} - Cross-Channel Proximity Analysis", fontsize=14, y=1.02)
+    plt.tight_layout()
+    return fig
+
+
+def plot_all_channel_nn_histograms(spots_df, scale=(1.0, .24, .24), max_dist=10, bins=100):
+    """
+    Plot histograms of nearest neighbor distances for all channel combinations.
+    Organized by query channel (one row per query channel), avoiding duplicate pairs.
+    
+    Parameters:
+    -----------
+    spots_df : pd.DataFrame
+        DataFrame containing spot data with 'chan' column
+    scale : tuple
+        Scaling factors for (z, y, x) coordinates
+    max_dist : float
+        Maximum distance for histogram x-axis (values above this are binned in "10+")
+    bins : int
+        Number of bins for histogram
+    """
+    # Get unique channels
+    channels = sorted(spots_df['chan'].unique())
+    n_channels = len(channels)
+    sns.set_context('notebook')
+    # Generate unique channel pairs organized by query channel
+    # Only include pairs where chan_a < chan_b to avoid duplicates
+    channel_pairs_by_query = {}
+    for idx, chan_a in enumerate(channels):
+        # Only include NN channels that come after this query channel (to avoid duplicates)
+        channel_pairs_by_query[chan_a] = [(chan_a, chan_b) for chan_b in channels[idx+1:]]
+    
+    # Calculate subplot grid dimensions
+    # Rows = number of query channels with pairs (n_channels - 1), Cols = max number of NN channels (n_channels - 1)
+    n_rows = n_channels - 1  # Last channel has no pairs (no channels after it)
+    n_cols = n_channels - 1
+    
+    # First pass: calculate all histograms to find global max density
+    all_nn_dfs = {}
+    max_density = 0
+    
+    for query_chan in channels:
+        pairs_for_query = channel_pairs_by_query[query_chan]
+        for chan_a, chan_b in pairs_for_query:
+            nn_df = cross_channel_nn(spots_df, chan_a=chan_a, chan_b=chan_b, scale=scale)
+            all_nn_dfs[(chan_a, chan_b)] = nn_df
+            
+            # Clip values at max_dist for histogram calculation
+            nn_dist_clipped = np.clip(nn_df["nn_dist"], 0, max_dist)
+            
+            # Calculate histogram to get max density
+            hist, _ = np.histogram(nn_dist_clipped, bins=bins, range=(0, max_dist), density=True)
+            max_density = max(max_density, hist.max())
+    
+    # Add some padding to max_density
+    #max_density *= 1.1
+    max_density = .75
+    
+    # Create figure
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+    
+    # Ensure axes is 2D array
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+    elif n_cols == 1:
+        axes = axes.reshape(-1, 1)
+    
+    # Track which axes have been used
+    used_axes = set()
+    
+    # Plot histogram for each channel pair
+    # Only iterate over channels that have pairs (all except the last one)
+    for row_idx, query_chan in enumerate(channels[:-1]):
+        pairs_for_query = channel_pairs_by_query[query_chan]
+        
+        for col_idx, (chan_a, chan_b) in enumerate(pairs_for_query):
+            print(f"Processing channel pair: {chan_a} → {chan_b}")
+            # Invert row index to flip vertically (bottom to top becomes top to bottom)
+            inverted_row_idx = n_rows - 1 - row_idx
+            ax = axes[inverted_row_idx, col_idx]
+            used_axes.add((inverted_row_idx, col_idx))
+            
+            # Get pre-calculated NN data
+            nn_df = all_nn_dfs[(chan_a, chan_b)]
+            
+            # Clip values at max_dist
+            nn_dist_clipped = np.clip(nn_df["nn_dist"], 0, max_dist)
+            n_clipped = (nn_df["nn_dist"] > max_dist).sum()
+            
+            # Plot histogram with density normalization and fixed y-axis
+            ax.hist(nn_dist_clipped, bins=bins, alpha=0.7, edgecolor='black', density=True)
+            
+            # Only show X-axis label on bottom row (which is now the original top row)
+            if row_idx == n_rows - 1:
+                ax.set_xlabel("NN Distance (scaled units)", fontsize=14)
+            else:
+                ax.set_xlabel("")
+            
+            # Only show Y-axis label on leftmost column
+            if col_idx == 0:
+                ax.set_ylabel("Density", fontsize=14)
+            else:
+                ax.set_ylabel("")
+            
+            # Add info about clipped values in title
+            title = f"{chan_a} → {chan_b}\n(n={len(nn_df):,}"
+            if n_clipped > 0:
+                title += f", {n_clipped:,} >{max_dist})"
+            else:
+                title += ")"
+            ax.set_title(title, fontsize=16)
+            
+            ax.set_xlim(0, max_dist)
+            ax.set_ylim(0, max_density)  # Set consistent y-axis limits
+            ax.grid(True, alpha=0.3)
+            
+            # Customize x-axis ticks to show "10+" for the last bin
+            # Get current x-ticks
+            xticks = ax.get_xticks()
+            xticklabels = [str(int(x)) if x < max_dist else f"{int(max_dist)}+" for x in xticks]
+            ax.set_xticks(xticks)
+            ax.set_xticklabels(xticklabels)
+            
+            # Add median line
+            median_dist = nn_df["nn_dist"].median()
+            median_label = f'Median: {median_dist:.2f}'
+            if median_dist > max_dist:
+                median_label += f' (>{max_dist})'
+                # Don't plot line if median is outside range
+            else:
+                ax.axvline(median_dist, color='red', linestyle='--', linewidth=2, 
+                           label=median_label)
+                ax.legend(fontsize=12)
+    
+    # Hide unused axes
+    for row_idx in range(n_rows):
+        for col_idx in range(n_cols):
+            if (row_idx, col_idx) not in used_axes:
+                axes[row_idx, col_idx].axis('off')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Print summary statistics
+    total_pairs = sum(len(pairs) for pairs in channel_pairs_by_query.values())
+    print(f"\nSummary: {n_channels} channels, {total_pairs} unique cross-channel pairs")
+    print(f"Channels: {channels}")
+    print(f"Layout: {n_rows} rows (query channels) × {n_cols} columns (NN channels)")
+    for chan, pairs in channel_pairs_by_query.items():
+        print(f"  Row {channels.index(chan)+1} (Query {chan}): {len(pairs)} pairs")
+    
+    return channel_pairs_by_query

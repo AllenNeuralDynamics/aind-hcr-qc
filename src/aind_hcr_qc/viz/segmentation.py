@@ -13,6 +13,7 @@ import seaborn as sns
 from aind_hcr_data_loader.hcr_dataset import HCRDataset
 
 import aind_hcr_qc.io.zarr_data as zarr_data
+from aind_hcr_qc.utils.utils import saveable_plot
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,8 @@ def plot_centroids(
     clip_range=(None, None),
     xlims=(None, None),
     ylims=(None, None),
+    vmin=None,
+    vmax=None,
     random_state=42,
     ax=None,
 ):
@@ -213,6 +216,22 @@ def plot_centroids(
         One of 'XY', 'ZX', or 'ZY'
     n_samples : int
         Number of random cells to plot
+    color_col : str, optional
+        Column name to use for color mapping
+    cmap : str
+        Colormap to use for color mapping
+    size : float
+        Size of scatter points
+    clip_range : tuple
+        Range to clip color_col values (min, max)
+    xlims : tuple
+        X-axis limits (min, max)
+    ylims : tuple
+        Y-axis limits (min, max)
+    vmin : float, optional
+        Minimum value for color scale
+    vmax : float, optional
+        Maximum value for color scale
     random_state : int
         Random seed for reproducibility
     ax : matplotlib.axes.Axes, optional
@@ -252,7 +271,7 @@ def plot_centroids(
 
     # use color col to set colorbar of scatter values
     if color_col is not None:
-        scatter = ax.scatter(df[x_coord], df[y_coord], alpha=0.5, c=df[color_col], cmap=cmap, s=size)
+        scatter = ax.scatter(df[x_coord], df[y_coord], alpha=0.5, c=df[color_col], cmap=cmap, s=size, vmin=vmin, vmax=vmax)
         # Add colorbar
         cbar = fig.colorbar(scatter, ax=ax)
         cbar.set_label(color_col, rotation=270, labelpad=15)
@@ -272,7 +291,7 @@ def plot_centroids(
     ax.set_title(f"Cell Centroids - {plane} (n={n_samples if n_samples is not None else len(df)})")
 
     # Reverse y-axis for ZX, ZY, and XY
-    if orientation in ["ZX", "ZY", "XY"]:
+    if orientation in ["ZX", "ZY"]:
         ax.invert_yaxis()
 
     if ax is None:
@@ -527,7 +546,7 @@ def plot_segmentation_overview_single(
     plt.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0)
     return fig
 
-
+@saveable_plot()
 def plot_single_cell_segmentation_overview(
     dataset, round_n, pyramid_level, plot_channel, plot_cell_id, num_planes=10, view="multi"
 ):

@@ -2,6 +2,7 @@ from .camera_alignment import qc_camera_alignment
 from .cell_x_gene import (
     plot_cell_x_gene_clustered,
     plot_cell_x_gene_simple,
+    fig_mixed_unmixed_cxg_and_corr
 )
 from .cells import (
     plot_single_cell_expression_all_rounds,
@@ -33,6 +34,7 @@ __all__ = [
     # cell x gene
     "plot_cell_x_gene_simple",
     "plot_cell_x_gene_clustered",
+    "fig_mixed_unmixed_cxg_and_corr",
     # segmentation
     "qc_segmentation",
     "plot_single_cell_segmentation_overview",

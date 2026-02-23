@@ -6,6 +6,9 @@ import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
 from sklearn.cluster import KMeans
+from aind_hcr_qc.utils.utils import saveable_plot
+import aind_hcr_data_loader.filters as hcr_filters
+
 
 # -------------------------------------------------------------------------------------------------
 # Data handling functions
@@ -127,7 +130,8 @@ def spot_count_cell_x_gene_coreg(
 # -------------------------------------------------------------------------------------------------
 
 
-def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None,title=None):
+def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None, title=None, 
+                           gene_sort='alphabetical', dataset=None):
     """
     Plot the cell x gene matrix as an image with inverted colormap.
 
@@ -138,10 +142,20 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     clip_range : tuple
         Range to clip the values in the cell x gene matrix.
     sort_gene : str, optional
-        Gene to sort the cell x gene matrix by. If None, sorts by the first gene.
-        Default is None.
+        DEPRECATED: Use gene_sort parameter instead. Gene to sort cells by.
     fig_size : tuple
         Size of the figure to plot.
+    ax : matplotlib axis, optional
+        Axis to plot on. If None, creates new figure.
+    title : str, optional
+        Title for the plot.
+    gene_sort : str, optional
+        How to sort genes (columns). Options:
+        - 'alphabetical' (default): Sort genes A-Z
+        - 'round_channel': Sort by imaging round then channel (requires dataset parameter)
+        - gene name string: Sort cells by expression of that gene
+    dataset : HCRDataset, optional
+        Required if gene_sort='round_channel'. Used to get channel-gene mapping.
 
     """
     if not isinstance(cxg, pd.DataFrame):
@@ -155,10 +169,26 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     cxg = cxg.astype(int)
     cxg = cxg.clip(lower=clip_range[0], upper=clip_range[1])
 
-    # sort by gene if specified
-    if sort_gene is not None and sort_gene not in cxg.columns:
-        raise ValueError(f"Gene '{sort_gene}' not found in cell x gene matrix columns.")
+    # Handle gene column sorting
+    if gene_sort == 'round_channel':
+        if dataset is None:
+            raise ValueError("dataset parameter required when gene_sort='round_channel'")
+        channel_gene_table = dataset.create_channel_gene_table()
+        gene_order = channel_gene_table.sort_values(['Round', 'Channel'])['Gene'].tolist()
+        gene_order = [g for g in gene_order if g in cxg.columns]
+        cxg = cxg[gene_order]
+    elif gene_sort == 'alphabetical':
+        cxg = cxg[sorted(cxg.columns)]
+    elif gene_sort in cxg.columns:
+        # gene_sort is a gene name, sort cells by it
+        cxg = cxg.sort_values(by=gene_sort, ascending=False)
+    elif gene_sort is not None and gene_sort != 'alphabetical':
+        raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
+    
+    # Legacy support for sort_gene parameter
     if sort_gene is not None:
+        if sort_gene not in cxg.columns:
+            raise ValueError(f"Gene '{sort_gene}' not found in cell x gene matrix columns.")
         cxg = cxg.sort_values(by=sort_gene, ascending=False)
     if ax is None:
         fig, ax = plt.subplots(figsize=fig_size)
@@ -193,7 +223,9 @@ def plot_cell_x_gene_clustered(
     add_cluster_labels=True,
     cbar_label="Gene Expression Count",
     title=None,
-    ax=None
+    ax=None,
+    gene_sort='alphabetical',
+    dataset=None
 ):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
@@ -205,8 +237,7 @@ def plot_cell_x_gene_clustered(
     clip_range : tuple
         Range to clip the values in the cell x gene matrix.
     sort_gene : str, optional
-        Gene to sort the cell x gene matrix by. If None, performs clustering instead.
-        Default is None.
+        DEPRECATED: Gene to sort cells by. If None, performs clustering instead.
     fig_size : tuple
         Size of the figure to plot.
     k : int
@@ -214,6 +245,19 @@ def plot_cell_x_gene_clustered(
     add_cluster_labels : bool
         Whether to add green dashed lines and labels to indicate cluster boundaries.
         Default is True.
+    cbar_label : str
+        Label for colorbar.
+    title : str, optional
+        Title for the plot.
+    ax : matplotlib axis, optional
+        Axis to plot on.
+    gene_sort : str, optional
+        How to sort genes (columns). Options:
+        - 'alphabetical' (default): Sort genes A-Z
+        - 'round_channel': Sort by imaging round then channel (requires dataset parameter)
+        - gene name string: Sort cells by expression of that gene
+    dataset : HCRDataset, optional
+        Required if gene_sort='round_channel'. Used to get channel-gene mapping.
 
     Returns
     -------
@@ -235,10 +279,29 @@ def plot_cell_x_gene_clustered(
     cxg = cxg.astype(int)
     cxg = cxg.clip(lower=clip_range[0], upper=clip_range[1])
 
-    # Perform clustering or sorting
-    if sort_gene is not None and sort_gene in cxg.columns:
+    # Handle gene column sorting first (before clustering/sorting rows)
+    if gene_sort == 'round_channel':
+        if dataset is None:
+            raise ValueError("dataset parameter required when gene_sort='round_channel'")
+        channel_gene_table = dataset.create_channel_gene_table()
+        gene_order = channel_gene_table.sort_values(['Round', 'Channel'])['Gene'].tolist()
+        gene_order = [g for g in gene_order if g in cxg.columns]
+        cxg = cxg[gene_order]
+    elif gene_sort == 'alphabetical':
+        cxg = cxg[sorted(cxg.columns)]
+    elif gene_sort in cxg.columns:
+        # gene_sort is a gene name, will be used for cell sorting below
+        pass
+    elif gene_sort is not None and gene_sort != 'alphabetical':
+        raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
+
+    # Perform clustering or sorting (for rows/cells)
+    # Use gene_sort if it's a gene name, otherwise use legacy sort_gene, otherwise cluster
+    cell_sort_gene = gene_sort if gene_sort in cxg.columns else sort_gene
+    
+    if cell_sort_gene is not None and cell_sort_gene in cxg.columns:
         # Sort by specified gene
-        cxg = cxg.sort_values(by=sort_gene, ascending=False)
+        cxg = cxg.sort_values(by=cell_sort_gene, ascending=False)
         cluster_labels = None
         sorted_cell_ids = cxg.index  # Store the sorted cell IDs
     else:
@@ -308,6 +371,344 @@ def plot_cell_x_gene_clustered(
         ax.set_title(title)
 
     return fig, cluster_labels, sorted_cell_ids
+
+
+from sklearn.metrics import silhouette_score
+
+@saveable_plot()
+def fig_mixed_unmixed_cxg_and_corr(
+    mixed_results, 
+    unmixed_results, 
+    inhibitory_genes=None,
+    k=None,
+    cluster_range=(2, 10),
+    corr_vmin=-0.5,
+    corr_vmax=0.5,
+    cxg_vmin=0,
+    cxg_vmax=50,
+    figsize=(18, 16),
+    log_transform=False,
+    dataset=None
+):
+    """
+    Advanced comparison of mixed vs unmixed results with clustering and correlation analysis.
+    
+    Parameters
+    ----------
+    mixed_results : pd.DataFrame
+        Mixed results with columns: cell_id, gene, spot_count
+    unmixed_results : pd.DataFrame
+        Unmixed results with columns: cell_id, gene, spot_count
+    inhibitory_genes : dict, optional
+        Dictionary mapping gene names to threshold counts for defining inhibitory cells.
+        A cell is classified as inhibitory if it exceeds the threshold for ANY of these genes (OR logic).
+        Default is {'Gad2': 50, 'Sst': 50, 'Npy': 50, 'Pvalb': 50, 'Vip': 50}.
+    k : int or None, optional
+        Number of clusters to use for all clustering. If None, will search for optimal k
+        using silhouette score within cluster_range. Default is None.
+    cluster_range : tuple, optional
+        Range of k values to test for optimal clustering (min, max). Only used if k is None.
+        Default is (2, 10).
+    corr_vmin : float, optional
+        Minimum value for correlation colormap. Default is -0.5.
+    corr_vmax : float, optional
+        Maximum value for correlation colormap. Default is 0.5.
+    cxg_vmin : float, optional
+        Minimum value for cell x gene heatmap colorbar. Default is 0.
+    cxg_vmax : float, optional
+        Maximum value for cell x gene heatmap colorbar. Default is 50.
+    figsize : tuple, optional
+        Figure size as (width, height). Default is (18, 16).
+    log_transform : bool, optional
+        If True, apply log2(x+1) transformation to spot counts. Default is False.
+    dataset : HCRDataset, optional
+        Required if gene_sort='round_channel'. Used to get channel-gene mapping.
+    
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object
+    results : dict
+        Dictionary containing:
+        - 'mixed_k': optimal k for mixed
+        - 'unmixed_k': optimal k for unmixed
+        - 'mixed_labels': cluster labels for mixed
+        - 'unmixed_labels': cluster labels for unmixed
+        - 'mixed_inhibitory_count': number of inhibitory cells in mixed
+        - 'unmixed_inhibitory_count': number of inhibitory cells in unmixed
+    """
+    
+    if inhibitory_genes is None:
+        inhibitory_genes = {'Gad2': 50, 'Sst': 50, 'Npy': 50, 'Pvalb': 50, 'Vip': 50}
+
+    # --- Data Preparation ---
+    # Pivot to cell x gene matrices
+    cxg_mixed = mixed_results.pivot(index="cell_id", columns="gene", values="spot_count").fillna(0)
+    cxg_unmixed = unmixed_results.pivot(index="cell_id", columns="gene", values="spot_count").fillna(0)
+    
+    # Apply log transformation if requested
+    if log_transform:
+        cxg_mixed = np.log2(cxg_mixed + 1)
+        cxg_unmixed = np.log2(cxg_unmixed + 1)
+    
+    # Find optimal k using silhouette score
+    def find_optimal_k(data, k_range):
+        """Find optimal k using silhouette score."""
+        n_samples = len(data)
+        if n_samples < 2:
+            print(f"Too few samples ({n_samples}) to cluster; using k=1.")
+            return 1
+        max_k = min(k_range[1], n_samples - 1)
+        k_start = min(k_range[0], max_k)
+        k_values = range(k_start, max_k + 1)
+        silhouette_scores = []
+        
+        for k_val in k_values:
+            kmeans = KMeans(n_clusters=k_val, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(data)
+            score = silhouette_score(data, labels)
+            silhouette_scores.append(score)
+        
+        optimal_idx = np.argmax(silhouette_scores)
+        optimal_k = list(k_values)[optimal_idx]
+        print(f"All scores: {silhouette_scores}")
+        print(f"Optimal k: {optimal_k} (silhouette score: {silhouette_scores[optimal_idx]:.3f})")
+        return optimal_k
+    
+    # Find or use provided k for both datasets
+    if k is not None:
+        print(f"Using provided k={k} for all clustering")
+        mixed_k = k
+        unmixed_k = k
+    else:
+        print("Finding optimal k for mixed data...")
+        mixed_k = find_optimal_k(cxg_mixed.values, cluster_range)
+        
+        print("Finding optimal k for unmixed data...")
+        unmixed_k = find_optimal_k(cxg_unmixed.values, cluster_range)
+    
+    # Perform clustering with optimal k
+    kmeans_mixed = KMeans(n_clusters=mixed_k, random_state=42, n_init=10)
+    mixed_labels = kmeans_mixed.fit_predict(cxg_mixed.values)
+    
+    kmeans_unmixed = KMeans(n_clusters=unmixed_k, random_state=42, n_init=10)
+    unmixed_labels = kmeans_unmixed.fit_predict(cxg_unmixed.values)
+
+    # Get inhibitory cells for mixed
+    print("Identifying mixed inhibitory cells...")
+    mixed_inhibitory_mask, mixed_inhib_genes = hcr_filters.get_inhibitory_mask(cxg_mixed, inhibitory_genes)
+    
+    if mixed_inhibitory_mask.sum() > 0:
+        cxg_mixed_inhib = cxg_mixed[mixed_inhibitory_mask]
+        mixed_labels_inhib = mixed_labels[mixed_inhibitory_mask]
+        print(f"Mixed inhibitory cells: {mixed_inhibitory_mask.sum()}/{len(cxg_mixed)}")
+        
+        # Find or use provided k for mixed inhibitory cells
+        if k is not None:
+            mixed_inhib_k = k
+        elif len(cxg_mixed_inhib) > cluster_range[1]:
+            print("Finding optimal k for mixed inhibitory cells...")
+            mixed_inhib_k = find_optimal_k(cxg_mixed_inhib.values, cluster_range)
+        else:
+            mixed_inhib_k = min(cluster_range[0], len(cxg_mixed_inhib) - 1) if len(cxg_mixed_inhib) > 1 else 1
+            print(f"Too few inhibitory cells for clustering, using k={mixed_inhib_k}")
+    else:
+        print("Warning: No inhibitory cells found in mixed data")
+        cxg_mixed_inhib = None
+        mixed_labels_inhib = None
+        mixed_inhib_k = None
+    
+    # Get inhibitory cells for unmixed
+    print("Identifying unmixed inhibitory cells...")
+    unmixed_inhibitory_mask, unmixed_inhib_genes = hcr_filters.get_inhibitory_mask(cxg_unmixed, inhibitory_genes)
+
+    if unmixed_inhibitory_mask.sum() > 0:
+        cxg_unmixed_inhib = cxg_unmixed[unmixed_inhibitory_mask]
+        unmixed_labels_inhib = unmixed_labels[unmixed_inhibitory_mask]
+        print(f"Unmixed inhibitory cells: {unmixed_inhibitory_mask.sum()}/{len(cxg_unmixed)}")
+        
+        # Find or use provided k for unmixed inhibitory cells
+        if k is not None:
+            unmixed_inhib_k = k
+        elif len(cxg_unmixed_inhib) > cluster_range[1]:
+            print("Finding optimal k for unmixed inhibitory cells...")
+            unmixed_inhib_k = find_optimal_k(cxg_unmixed_inhib.values, cluster_range)
+        else:
+            unmixed_inhib_k = min(cluster_range[0], len(cxg_unmixed_inhib) - 1) if len(cxg_unmixed_inhib) > 1 else 1
+            print(f"Too few inhibitory cells for clustering, using k={unmixed_inhib_k}")
+    else:
+        print("Warning: No inhibitory cells found in unmixed data")
+        cxg_unmixed_inhib = None
+        unmixed_labels_inhib = None
+        unmixed_inhib_k = None
+    
+    # --- Figure Layout ---
+    # Top two rows take 4/5 of space, bottom row takes 1/5
+    # Now using 4 columns to accommodate 4 correlation matrices
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(3, 4, hspace=0.3, wspace=0.3, height_ratios=[2, 2, 1])
+    
+    # --- Row 1: Mixed Results (rows 0) ---
+    ax00 = fig.add_subplot(gs[0, 0])
+    ax01 = fig.add_subplot(gs[0, 1])
+    ax02 = fig.add_subplot(gs[0, 2])
+    
+    # Plot 1: Mixed simple (sorted by Gad2 expression)
+    sort_gene = 'Gad2' if 'Gad2' in cxg_mixed.columns else None
+    plot_cell_x_gene_simple(cxg_mixed, ax=ax00, title="Mixed Results", gene_sort=sort_gene,
+                               clip_range=(cxg_vmin, cxg_vmax))
+    ax00.set_yticks([0, len(cxg_mixed)])
+    ax00.set_yticklabels([0, len(cxg_mixed)])
+    
+    # Plot 2: Mixed clustered
+    plot_cell_x_gene_clustered(cxg_mixed, ax=ax01, k=mixed_k, 
+                                   title=f"Mixed Clustered (k={mixed_k})",
+                                   gene_sort='round_channel',
+                                   dataset=dataset,
+                                   clip_range=(cxg_vmin, cxg_vmax))
+    ax01.set_yticks([0, len(cxg_mixed)])
+    ax01.set_yticklabels([0, len(cxg_mixed)])
+    
+    # Plot 3: Mixed inhibitory clustered
+    if cxg_mixed_inhib is not None and len(cxg_mixed_inhib) > 0:
+        plot_cell_x_gene_clustered(cxg_mixed_inhib, ax=ax02, k=mixed_inhib_k,
+                                    gene_sort='round_channel',
+                                       title=f"Mixed Inhibitory Cells (n={len(cxg_mixed_inhib)}, k={mixed_inhib_k})",
+                                       dataset=dataset,
+                                       clip_range=(cxg_vmin, cxg_vmax))
+        ax02.set_yticks([0, len(cxg_mixed_inhib)])
+        ax02.set_yticklabels([0, len(cxg_mixed_inhib)])
+    else:
+        ax02.text(0.5, 0.5, 'No inhibitory cells', ha='center', va='center', 
+                 transform=ax02.transAxes)
+        ax02.set_title(f"Mixed Inhibitory Cells")
+
+    # --- Row 2: Unmixed Results ---
+    ax10 = fig.add_subplot(gs[1, 0])
+    ax11 = fig.add_subplot(gs[1, 1])
+    ax12 = fig.add_subplot(gs[1, 2])
+    
+    # Plot 4: Unmixed simple (sorted by Gad2 expression)
+    sort_gene = 'Gad2' if 'Gad2' in cxg_unmixed.columns else None
+    plot_cell_x_gene_simple(cxg_unmixed, ax=ax10, title="Unmixed Results", gene_sort=sort_gene,
+                               clip_range=(cxg_vmin, cxg_vmax))
+    ax10.set_yticks([0, len(cxg_unmixed)])
+    ax10.set_yticklabels([0, len(cxg_unmixed)])
+    
+    # Plot 5: Unmixed clustered
+    plot_cell_x_gene_clustered(cxg_unmixed, ax=ax11, k=unmixed_k,
+                                   title=f"Unmixed Clustered (k={unmixed_k})",
+                                   gene_sort='round_channel',
+                                   dataset=dataset,
+                                   clip_range=(cxg_vmin, cxg_vmax))
+    ax11.set_yticks([0, len(cxg_unmixed)])
+    ax11.set_yticklabels([0, len(cxg_unmixed)])
+    
+    # Plot 6: Unmixed inhibitory clustered
+    if cxg_unmixed_inhib is not None and len(cxg_unmixed_inhib) > 0:
+        plot_cell_x_gene_clustered(cxg_unmixed_inhib, ax=ax12, k=unmixed_inhib_k,
+                                        gene_sort='round_channel',
+                                       title=f"Unmixed Inhibitory Cells (n={len(cxg_unmixed_inhib)}, k={unmixed_inhib_k})",
+                                       dataset=dataset,
+                                       clip_range=(cxg_vmin, cxg_vmax))
+        ax12.set_yticks([0, len(cxg_unmixed_inhib)])
+        ax12.set_yticklabels([0, len(cxg_unmixed_inhib)])
+    else:
+        ax12.text(0.5, 0.5, 'No inhibitory cells', ha='center', va='center',
+                 transform=ax12.transAxes)
+        ax12.set_title(f"Unmixed Inhibitory Cells")
+    
+    # --- Row 3: Correlation Matrices (4 plots) ---
+    ax20 = fig.add_subplot(gs[2, 0])
+    ax21 = fig.add_subplot(gs[2, 1])
+    ax22 = fig.add_subplot(gs[2, 2])
+    ax23 = fig.add_subplot(gs[2, 3])
+    
+    # Compute gene-gene pairwise correlations (correlate columns, which are genes)
+    corr_unmixed = cxg_unmixed.corr(method='pearson')
+    corr_mixed = cxg_mixed.corr(method='pearson')
+    
+    # Plot 1: Unmixed all cells correlation
+    im_unmixed = ax20.imshow(corr_unmixed.values, cmap='RdBu_r', 
+                            vmin=corr_vmin, vmax=corr_vmax,
+                            aspect='equal', interpolation='nearest')
+    ax20.set_title("Unmixed All Cells\nGene-Gene Correlation", fontsize=10)
+    ax20.set_xlabel("Gene", fontsize=8)
+    ax20.set_ylabel("Gene", fontsize=8)
+    ax20.set_xticks(range(len(corr_unmixed.columns)))
+    ax20.set_yticks(range(len(corr_unmixed.columns)))
+    ax20.set_xticklabels(corr_unmixed.columns, rotation=90, fontsize=7)
+    ax20.set_yticklabels(corr_unmixed.columns, fontsize=7)
+    plt.colorbar(im_unmixed, ax=ax20, fraction=0.046, pad=0.04)
+    
+    # Plot 2: Mixed all cells correlation
+    im_mixed = ax21.imshow(corr_mixed.values, cmap='RdBu_r',
+                          vmin=corr_vmin, vmax=corr_vmax,
+                          aspect='equal', interpolation='nearest')
+    ax21.set_title("Mixed All Cells\nGene-Gene Correlation", fontsize=10)
+    ax21.set_xlabel("Gene", fontsize=8)
+    ax21.set_ylabel("Gene", fontsize=8)
+    ax21.set_xticks(range(len(corr_mixed.columns)))
+    ax21.set_yticks(range(len(corr_mixed.columns)))
+    ax21.set_xticklabels(corr_mixed.columns, rotation=90, fontsize=7)
+    ax21.set_yticklabels(corr_mixed.columns, fontsize=7)
+    plt.colorbar(im_mixed, ax=ax21, fraction=0.046, pad=0.04)
+    
+    # Plot 3: Unmixed inhibitory cells correlation
+    if cxg_unmixed_inhib is not None and len(cxg_unmixed_inhib) > 1:
+        corr_unmixed_inhib = cxg_unmixed_inhib.corr(method='pearson')
+        im_unmixed_inhib = ax22.imshow(corr_unmixed_inhib.values, cmap='RdBu_r',
+                                      vmin=corr_vmin, vmax=corr_vmax,
+                                      aspect='equal', interpolation='nearest')
+        ax22.set_title(f"Unmixed Inhibitory\n(n={len(cxg_unmixed_inhib)}) Correlation", fontsize=10)
+        ax22.set_xlabel("Gene", fontsize=8)
+        ax22.set_ylabel("Gene", fontsize=8)
+        ax22.set_xticks(range(len(corr_unmixed_inhib.columns)))
+        ax22.set_yticks(range(len(corr_unmixed_inhib.columns)))
+        ax22.set_xticklabels(corr_unmixed_inhib.columns, rotation=90, fontsize=7)
+        ax22.set_yticklabels(corr_unmixed_inhib.columns, fontsize=7)
+        plt.colorbar(im_unmixed_inhib, ax=ax22, fraction=0.046, pad=0.04)
+    else:
+        ax22.text(0.5, 0.5, 'No/insufficient\ninhibitory cells', ha='center', va='center',
+                 transform=ax22.transAxes, fontsize=10)
+        ax22.set_title(f"Unmixed Inhibitory\nCorrelation", fontsize=10)
+        ax22.axis('off')
+    
+    # Plot 4: Mixed inhibitory cells correlation
+    if cxg_mixed_inhib is not None and len(cxg_mixed_inhib) > 1:
+        corr_mixed_inhib = cxg_mixed_inhib.corr(method='pearson')
+        im_mixed_inhib = ax23.imshow(corr_mixed_inhib.values, cmap='RdBu_r',
+                                    vmin=corr_vmin, vmax=corr_vmax,
+                                    aspect='equal', interpolation='nearest')
+        ax23.set_title(f"Mixed Inhibitory\n(n={len(cxg_mixed_inhib)}) Correlation", fontsize=10)
+        ax23.set_xlabel("Gene", fontsize=8)
+        ax23.set_ylabel("Gene", fontsize=8)
+        ax23.set_xticks(range(len(corr_mixed_inhib.columns)))
+        ax23.set_yticks(range(len(corr_mixed_inhib.columns)))
+        ax23.set_xticklabels(corr_mixed_inhib.columns, rotation=90, fontsize=7)
+        ax23.set_yticklabels(corr_mixed_inhib.columns, fontsize=7)
+        plt.colorbar(im_mixed_inhib, ax=ax23, fraction=0.046, pad=0.04)
+    else:
+        ax23.text(0.5, 0.5, 'No/insufficient\ninhibitory cells', ha='center', va='center',
+                 transform=ax23.transAxes, fontsize=10)
+        ax23.set_title(f"Mixed Inhibitory\nCorrelation", fontsize=10)
+        ax23.axis('off')
+    
+    # Overall title
+    fig.suptitle('Mixed vs Unmixed Comparison with Clustering and Correlation Analysis', 
+                fontsize=14, y=0.995)
+    
+    # Prepare results dictionary
+    results = {
+        'mixed_k': mixed_k,
+        'unmixed_k': unmixed_k,
+        'mixed_labels': mixed_labels,
+        'unmixed_labels': unmixed_labels,
+        'mixed_inhibitory_count': mixed_inhibitory_mask.sum() if cxg_mixed_inhib is not None else 0,
+        'unmixed_inhibitory_count': unmixed_inhibitory_mask.sum() if cxg_unmixed_inhib is not None else 0
+    }
+    
+    return fig, results
 
 
 # -------------------------------------------------------------------------------------------------
