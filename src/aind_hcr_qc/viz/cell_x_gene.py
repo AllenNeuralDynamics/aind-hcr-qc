@@ -379,7 +379,7 @@ from sklearn.metrics import silhouette_score
 def fig_mixed_unmixed_cxg_and_corr(
     mixed_results, 
     unmixed_results, 
-    inhibitory_genes={'Gad2': 50, 'Sst': 50, 'Npy': 50, 'Pvalb': 50, 'Vip':50},
+    inhibitory_genes=None,
     k=None,
     cluster_range=(2, 10),
     corr_vmin=-0.5,
@@ -438,6 +438,9 @@ def fig_mixed_unmixed_cxg_and_corr(
         - 'unmixed_inhibitory_count': number of inhibitory cells in unmixed
     """
     
+    if inhibitory_genes is None:
+        inhibitory_genes = {'Gad2': 50, 'Sst': 50, 'Npy': 50, 'Pvalb': 50, 'Vip': 50}
+
     # --- Data Preparation ---
     # Pivot to cell x gene matrices
     cxg_mixed = mixed_results.pivot(index="cell_id", columns="gene", values="spot_count").fillna(0)
