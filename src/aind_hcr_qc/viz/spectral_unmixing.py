@@ -2479,7 +2479,6 @@ def cross_channel_nn(
         columns=["query_index", "query_chan", "nn_index", "nn_dist", cell_col]
     )
 
-import torch
 def cross_channel_nn_gpu(
     spots_df: pd.DataFrame,
     chan_a,
@@ -2502,6 +2501,13 @@ def cross_channel_nn_gpu(
     batch_size : int
         Number of spots to process at once on GPU (reduce if OOM)
     """
+    try:
+        import torch
+    except ImportError as e:
+        raise ImportError(
+            "PyTorch is required for cross_channel_nn_gpu. "
+            "Install it with: pip install torch"
+        ) from e
     df = spots_df.copy()
     
     # Normalize channel dtype
