@@ -387,6 +387,91 @@ def plot_cell_x_gene_clustered(
 
 from sklearn.metrics import silhouette_score
 
+
+def _plot_inhibitory_gene_dist(ax, cxg_pivot, gene, threshold, log_transform, drop_zeros=True):
+    """
+    Plot the per-cell spot-count distribution for one inhibitory gene on a single axis.
+
+    Data is always displayed on a log2(x+1) scale for readability.  The
+    threshold line is positioned and annotated differently depending on
+    whether the caller is working with log-transformed or raw data.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+    cxg_pivot : pd.DataFrame
+        Cell × gene matrix (cells as rows, genes as columns).
+    gene : str
+        Gene name to plot (must be a column in cxg_pivot).
+    threshold : float
+        Inhibitory-cell threshold for this gene, in the same space as
+        cxg_pivot values (i.e. already log2 if log_transform=True,
+        raw counts if log_transform=False).
+    log_transform : bool
+        Whether cxg_pivot values are already log2(x+1) transformed.
+    drop_zeros : bool
+        If True (default), cells with zero expression are excluded from the
+        KDE so the non-expressing peak does not dominate the plot.  A compact
+        note showing the zero count and percentage is added below the
+        threshold annotation.
+    """
+    import seaborn as sns
+
+    if gene not in cxg_pivot.columns:
+        ax.text(0.5, 0.5, f"{gene}\nnot found", ha='center', va='center',
+                transform=ax.transAxes, fontsize=9)
+        ax.axis('off')
+        return
+
+    raw_counts = cxg_pivot[gene]
+    n_total = len(raw_counts)
+
+    # Determine zero mask in the original (possibly log) space
+    n_zeros = int((raw_counts == 0).sum())
+    pct_zeros = 100.0 * n_zeros / n_total if n_total > 0 else 0.0
+
+    if drop_zeros:
+        raw_counts = raw_counts[raw_counts > 0]
+
+    if log_transform:
+        # Values are already log2(x+1); plot directly
+        plot_data = raw_counts
+        threshold_x = threshold
+        xlabel = "log2(x+1)"
+    else:
+        # Values are raw counts; convert to log2(x+1) for display only
+        plot_data = np.log2(raw_counts + 1)
+        threshold_x = np.log2(threshold + 1)
+        xlabel = "log2(raw+1)"
+
+    sns.kdeplot(plot_data, ax=ax, fill=True, alpha=0.5)
+    ax.axvline(x=threshold_x, color='red', linestyle='--', linewidth=1.5)
+
+    # Compact threshold label: "T = X" with zero-drop note on the line below
+    if log_transform:
+        t_label = f"T={threshold:.1f}"
+    else:
+        t_label = f"T={threshold:.0f} ({threshold_x:.1f})"
+
+    zero_note = f"0s: {n_zeros} ({pct_zeros:.0f}%)" if drop_zeros else ""
+
+    annotation = t_label if not zero_note else f"{t_label}\n{zero_note}"
+
+    # x in data coords, y in axes fraction — reliable regardless of KDE scale
+    ax.text(
+        threshold_x, 0.97,
+        annotation,
+        color='red', fontsize=6.5, ha='center', va='top',
+        transform=ax.get_xaxis_transform(),
+        linespacing=1.3,
+    )
+
+    ax.set_title(gene, fontsize=9)
+    ax.set_xlabel(xlabel, fontsize=7)
+    ax.set_ylabel("Density", fontsize=7)
+    ax.tick_params(labelsize=7)
+
+
 @saveable_plot()
 def fig_mixed_unmixed_cxg_and_corr(
     mixed_results, 
@@ -398,7 +483,7 @@ def fig_mixed_unmixed_cxg_and_corr(
     corr_vmax=0.5,
     cxg_vmin=0,
     cxg_vmax=50,
-    figsize=(18, 16),
+    figsize=(18, 24),
     log_transform=False,
     dataset=None
 ):
@@ -558,15 +643,25 @@ def fig_mixed_unmixed_cxg_and_corr(
         unmixed_inhib_k = None
     
     # --- Figure Layout ---
-    # Top two rows take 4/5 of space, bottom row takes 1/5
-    # Now using 4 columns to accommodate 4 correlation matrices
+    # Rows 0-1: heatmaps, Row 2: correlations, Rows 3-4: inhibitory gene distributions
+    # Column count = max(4, n_inh_genes) so distribution rows fit without spanning issues
+    inh_genes = list(inhibitory_genes.keys())
+    n_inh_genes = len(inh_genes)
+    n_cols = max(4, n_inh_genes)
+
     fig = plt.figure(figsize=figsize)
-    gs = fig.add_gridspec(3, 4, hspace=0.3, wspace=0.3, height_ratios=[2, 2, 1])
-    
-    # --- Row 1: Mixed Results (rows 0) ---
-    ax00 = fig.add_subplot(gs[0, 0])
-    ax01 = fig.add_subplot(gs[0, 1])
-    ax02 = fig.add_subplot(gs[0, 2])
+    gs = fig.add_gridspec(5, n_cols, hspace=0.5, wspace=0.4,
+                          height_ratios=[3, 3, 2, 1, 1])
+
+    # Rows 0 & 1: use a nested 3-column sub-gridspec so the three heatmaps
+    # always span the full figure width, regardless of n_cols.
+    gs_row0 = gridspec.GridSpecFromSubplotSpec(1, 3, subplot_spec=gs[0, :], wspace=0.3)
+    gs_row1 = gridspec.GridSpecFromSubplotSpec(1, 3, subplot_spec=gs[1, :], wspace=0.3)
+
+    # --- Row 0: Mixed Results ---
+    ax00 = fig.add_subplot(gs_row0[0])
+    ax01 = fig.add_subplot(gs_row0[1])
+    ax02 = fig.add_subplot(gs_row0[2])
     
     # Plot 1: Mixed simple (sorted by Gad2 expression)
     sort_gene = 'Gad2' if 'Gad2' in cxg_mixed.columns else None
@@ -600,10 +695,10 @@ def fig_mixed_unmixed_cxg_and_corr(
                  transform=ax02.transAxes)
         ax02.set_title(f"Mixed Inhibitory Cells")
 
-    # --- Row 2: Unmixed Results ---
-    ax10 = fig.add_subplot(gs[1, 0])
-    ax11 = fig.add_subplot(gs[1, 1])
-    ax12 = fig.add_subplot(gs[1, 2])
+    # --- Row 1: Unmixed Results ---
+    ax10 = fig.add_subplot(gs_row1[0])
+    ax11 = fig.add_subplot(gs_row1[1])
+    ax12 = fig.add_subplot(gs_row1[2])
     
     # Plot 4: Unmixed simple (sorted by Gad2 expression)
     sort_gene = 'Gad2' if 'Gad2' in cxg_unmixed.columns else None
@@ -637,11 +732,12 @@ def fig_mixed_unmixed_cxg_and_corr(
                  transform=ax12.transAxes)
         ax12.set_title(f"Unmixed Inhibitory Cells")
     
-    # --- Row 3: Correlation Matrices (4 plots) ---
-    ax20 = fig.add_subplot(gs[2, 0])
-    ax21 = fig.add_subplot(gs[2, 1])
-    ax22 = fig.add_subplot(gs[2, 2])
-    ax23 = fig.add_subplot(gs[2, 3])
+    # --- Row 2: Correlation Matrices (4 plots) ---
+    gs_row2 = gridspec.GridSpecFromSubplotSpec(1, 4, subplot_spec=gs[2, :], wspace=0.4)
+    ax20 = fig.add_subplot(gs_row2[0])
+    ax21 = fig.add_subplot(gs_row2[1])
+    ax22 = fig.add_subplot(gs_row2[2])
+    ax23 = fig.add_subplot(gs_row2[3])
     
     # Compute gene-gene pairwise correlations (correlate columns, which are genes)
     corr_unmixed = cxg_unmixed.corr(method='pearson')
@@ -650,7 +746,8 @@ def fig_mixed_unmixed_cxg_and_corr(
     # Plot 1: Unmixed all cells correlation
     im_unmixed = ax20.imshow(corr_unmixed.values, cmap='RdBu_r', 
                             vmin=corr_vmin, vmax=corr_vmax,
-                            aspect='equal', interpolation='nearest')
+                            aspect='auto', interpolation='nearest')
+    ax20.set_aspect('equal', adjustable='box')
     ax20.set_title("Unmixed All Cells\nGene-Gene Correlation", fontsize=10)
     ax20.set_xlabel("Gene", fontsize=8)
     ax20.set_ylabel("Gene", fontsize=8)
@@ -663,7 +760,8 @@ def fig_mixed_unmixed_cxg_and_corr(
     # Plot 2: Mixed all cells correlation
     im_mixed = ax21.imshow(corr_mixed.values, cmap='RdBu_r',
                           vmin=corr_vmin, vmax=corr_vmax,
-                          aspect='equal', interpolation='nearest')
+                          aspect='auto', interpolation='nearest')
+    ax21.set_aspect('equal', adjustable='box')
     ax21.set_title("Mixed All Cells\nGene-Gene Correlation", fontsize=10)
     ax21.set_xlabel("Gene", fontsize=8)
     ax21.set_ylabel("Gene", fontsize=8)
@@ -678,7 +776,8 @@ def fig_mixed_unmixed_cxg_and_corr(
         corr_unmixed_inhib = cxg_unmixed_inhib.corr(method='pearson')
         im_unmixed_inhib = ax22.imshow(corr_unmixed_inhib.values, cmap='RdBu_r',
                                       vmin=corr_vmin, vmax=corr_vmax,
-                                      aspect='equal', interpolation='nearest')
+                                      aspect='auto', interpolation='nearest')
+        ax22.set_aspect('equal', adjustable='box')
         ax22.set_title(f"Unmixed Inhibitory\n(n={len(cxg_unmixed_inhib)}) Correlation", fontsize=10)
         ax22.set_xlabel("Gene", fontsize=8)
         ax22.set_ylabel("Gene", fontsize=8)
@@ -698,7 +797,8 @@ def fig_mixed_unmixed_cxg_and_corr(
         corr_mixed_inhib = cxg_mixed_inhib.corr(method='pearson')
         im_mixed_inhib = ax23.imshow(corr_mixed_inhib.values, cmap='RdBu_r',
                                     vmin=corr_vmin, vmax=corr_vmax,
-                                    aspect='equal', interpolation='nearest')
+                                    aspect='auto', interpolation='nearest')
+        ax23.set_aspect('equal', adjustable='box')
         ax23.set_title(f"Mixed Inhibitory\n(n={len(cxg_mixed_inhib)}) Correlation", fontsize=10)
         ax23.set_xlabel("Gene", fontsize=8)
         ax23.set_ylabel("Gene", fontsize=8)
@@ -713,6 +813,22 @@ def fig_mixed_unmixed_cxg_and_corr(
         ax23.set_title(f"Mixed Inhibitory\nCorrelation", fontsize=10)
         ax23.axis('off')
     
+    # --- Row 3: Mixed inhibitory gene distributions ---
+    for col_idx, gene in enumerate(inh_genes):
+        ax = fig.add_subplot(gs[3, col_idx])
+        threshold = inhibitory_genes[gene]
+        _plot_inhibitory_gene_dist(ax, cxg_mixed, gene, threshold, log_transform)
+        if col_idx == 0:
+            ax.set_ylabel("Density\n(Mixed)", fontsize=8)
+
+    # --- Row 4: Unmixed inhibitory gene distributions ---
+    for col_idx, gene in enumerate(inh_genes):
+        ax = fig.add_subplot(gs[4, col_idx])
+        threshold = inhibitory_genes[gene]
+        _plot_inhibitory_gene_dist(ax, cxg_unmixed, gene, threshold, log_transform)
+        if col_idx == 0:
+            ax.set_ylabel("Density\n(Unmixed)", fontsize=8)
+
     # Overall title
     fig.suptitle('Mixed vs Unmixed Comparison with Clustering and Correlation Analysis', 
                 fontsize=14, y=0.995)
