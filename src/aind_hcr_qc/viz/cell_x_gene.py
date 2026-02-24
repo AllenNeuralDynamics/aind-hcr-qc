@@ -131,7 +131,7 @@ def spot_count_cell_x_gene_coreg(
 
 
 def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None, title=None, 
-                           gene_sort='alphabetical', dataset=None):
+                           gene_sort='alphabetical', dataset=None, cbar_label="Transcript count"):
     """
     Plot the cell x gene matrix as an image with inverted colormap.
 
@@ -201,7 +201,7 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     )
     # show colorbar
     cbar = plt.colorbar(ax.imshow(cxg, aspect="auto", cmap="gray_r", interpolation="none"), ax=ax)
-    cbar.set_label("Gene Expression Count", rotation=270, labelpad=20)
+    cbar.set_label(cbar_label, rotation=270, labelpad=20)
     cbar.ax.tick_params(labelsize=10)
     # cbar.set_clim(clip_range[0], clip_range[1])
 
@@ -221,11 +221,12 @@ def plot_cell_x_gene_clustered(
     fig_size=(4, 6),
     k=3,
     add_cluster_labels=True,
-    cbar_label="Gene Expression Count",
+    cbar_label="Transcript count",
     title=None,
     ax=None,
     gene_sort='alphabetical',
-    dataset=None
+    dataset=None,
+    within_cluster_sort_gene='Gad2',
 ):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
@@ -246,7 +247,7 @@ def plot_cell_x_gene_clustered(
         Whether to add green dashed lines and labels to indicate cluster boundaries.
         Default is True.
     cbar_label : str
-        Label for colorbar.
+        Label for colorbar. Default is "Transcript count".
     title : str, optional
         Title for the plot.
     ax : matplotlib axis, optional
@@ -258,6 +259,9 @@ def plot_cell_x_gene_clustered(
         - gene name string: Sort cells by expression of that gene
     dataset : HCRDataset, optional
         Required if gene_sort='round_channel'. Used to get channel-gene mapping.
+    within_cluster_sort_gene : str, optional
+        When clustering, sort cells within each cluster by descending expression of this gene.
+        Default is 'Gad2'. If the gene is not present in cxg, falls back to total expression.
 
     Returns
     -------
@@ -303,16 +307,21 @@ def plot_cell_x_gene_clustered(
         # Sort by specified gene
         cxg = cxg.sort_values(by=cell_sort_gene, ascending=False)
         cluster_labels = None
-        sorted_cell_ids = cxg.index  # Store the sorted cell IDs
+        sorted_cell_ids = cxg.index
+        y_label = f"Cells sorted by {cell_sort_gene}"
     else:
         # Perform K-means clustering
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
         cluster_labels = kmeans.fit_predict(cxg.values)
 
-        # Sort by cluster labels first, then by total expression within each cluster
+        # Sort by cluster label, then within each cluster by within_cluster_sort_gene
+        # (or total expression if gene not present)
         cxg["cluster"] = cluster_labels
-        cxg["total_expression"] = cxg.drop("cluster", axis=1).sum(axis=1)
-        cxg = cxg.sort_values(["cluster", "total_expression"], ascending=[True, False])
+        if within_cluster_sort_gene and within_cluster_sort_gene in cxg.columns:
+            cxg["_sort_within"] = cxg[within_cluster_sort_gene]
+        else:
+            cxg["_sort_within"] = cxg.drop("cluster", axis=1).sum(axis=1)
+        cxg = cxg.sort_values(["cluster", "_sort_within"], ascending=[True, False])
 
         # Update cluster labels to match the sorted order
         cluster_labels = cxg["cluster"].values
@@ -321,7 +330,9 @@ def plot_cell_x_gene_clustered(
         sorted_cell_ids = cxg.index
 
         # Remove helper columns
-        cxg = cxg.drop(["cluster", "total_expression"], axis=1)
+        cxg = cxg.drop(["cluster", "_sort_within"], axis=1)
+
+        y_label = "Cells sorted by cluster ID"
 
     if ax is None:
         fig, ax = plt.subplots(figsize=fig_size)
@@ -339,6 +350,9 @@ def plot_cell_x_gene_clustered(
     # add gene names from dataframe
     ax.set_xticks(ticks=range(len(cxg.columns)), labels=cxg.columns, rotation=90)
 
+    # y-axis label
+    ax.set_ylabel(y_label, fontsize=9)
+
     # Add cluster labels if clustering was performed and requested
     if cluster_labels is not None and add_cluster_labels:
         # Find cluster boundaries
@@ -348,21 +362,19 @@ def plot_cell_x_gene_clustered(
         for boundary in cluster_changes:
             ax.axhline(y=boundary, color="green", linestyle="--", linewidth=2.0, alpha=0.9)
 
-        # Add cluster labels
+        # Add cluster ID labels (number only, no "C" prefix)
         unique_clusters = np.unique(cluster_labels)
         for cluster_id in unique_clusters:
-            # Find the middle position of each cluster
             cluster_indices = np.where(cluster_labels == cluster_id)[0]
             cluster_center = (cluster_indices[0] + cluster_indices[-1]) / 2
 
-            # Add text label
             ax.text(
                 -0.5,
                 cluster_center,
-                f"C{cluster_id}",
+                str(cluster_id),
                 color="green",
-                fontweight="bold",
-                fontsize=14,
+                fontweight="normal",
+                fontsize=10,
                 verticalalignment="center",
                 horizontalalignment="right",
             )
@@ -440,6 +452,9 @@ def fig_mixed_unmixed_cxg_and_corr(
     
     if inhibitory_genes is None:
         inhibitory_genes = {'Gad2': 50, 'Sst': 50, 'Npy': 50, 'Pvalb': 50, 'Vip': 50}
+
+    # Derive colorbar label from log_transform setting
+    cbar_label = "Transcript expression log2(x+1)" if log_transform else "Transcript count"
 
     # --- Data Preparation ---
     # Pivot to cell x gene matrices
@@ -556,7 +571,7 @@ def fig_mixed_unmixed_cxg_and_corr(
     # Plot 1: Mixed simple (sorted by Gad2 expression)
     sort_gene = 'Gad2' if 'Gad2' in cxg_mixed.columns else None
     plot_cell_x_gene_simple(cxg_mixed, ax=ax00, title="Mixed Results", gene_sort=sort_gene,
-                               clip_range=(cxg_vmin, cxg_vmax))
+                               clip_range=(cxg_vmin, cxg_vmax), cbar_label=cbar_label)
     ax00.set_yticks([0, len(cxg_mixed)])
     ax00.set_yticklabels([0, len(cxg_mixed)])
     
@@ -565,6 +580,7 @@ def fig_mixed_unmixed_cxg_and_corr(
                                    title=f"Mixed Clustered (k={mixed_k})",
                                    gene_sort='round_channel',
                                    dataset=dataset,
+                                   cbar_label=cbar_label,
                                    clip_range=(cxg_vmin, cxg_vmax))
     ax01.set_yticks([0, len(cxg_mixed)])
     ax01.set_yticklabels([0, len(cxg_mixed)])
@@ -575,6 +591,7 @@ def fig_mixed_unmixed_cxg_and_corr(
                                     gene_sort='round_channel',
                                        title=f"Mixed Inhibitory Cells (n={len(cxg_mixed_inhib)}, k={mixed_inhib_k})",
                                        dataset=dataset,
+                                       cbar_label=cbar_label,
                                        clip_range=(cxg_vmin, cxg_vmax))
         ax02.set_yticks([0, len(cxg_mixed_inhib)])
         ax02.set_yticklabels([0, len(cxg_mixed_inhib)])
@@ -591,7 +608,7 @@ def fig_mixed_unmixed_cxg_and_corr(
     # Plot 4: Unmixed simple (sorted by Gad2 expression)
     sort_gene = 'Gad2' if 'Gad2' in cxg_unmixed.columns else None
     plot_cell_x_gene_simple(cxg_unmixed, ax=ax10, title="Unmixed Results", gene_sort=sort_gene,
-                               clip_range=(cxg_vmin, cxg_vmax))
+                               clip_range=(cxg_vmin, cxg_vmax), cbar_label=cbar_label)
     ax10.set_yticks([0, len(cxg_unmixed)])
     ax10.set_yticklabels([0, len(cxg_unmixed)])
     
@@ -600,6 +617,7 @@ def fig_mixed_unmixed_cxg_and_corr(
                                    title=f"Unmixed Clustered (k={unmixed_k})",
                                    gene_sort='round_channel',
                                    dataset=dataset,
+                                   cbar_label=cbar_label,
                                    clip_range=(cxg_vmin, cxg_vmax))
     ax11.set_yticks([0, len(cxg_unmixed)])
     ax11.set_yticklabels([0, len(cxg_unmixed)])
@@ -610,6 +628,7 @@ def fig_mixed_unmixed_cxg_and_corr(
                                         gene_sort='round_channel',
                                        title=f"Unmixed Inhibitory Cells (n={len(cxg_unmixed_inhib)}, k={unmixed_inhib_k})",
                                        dataset=dataset,
+                                       cbar_label=cbar_label,
                                        clip_range=(cxg_vmin, cxg_vmax))
         ax12.set_yticks([0, len(cxg_unmixed_inhib)])
         ax12.set_yticklabels([0, len(cxg_unmixed_inhib)])
