@@ -24,6 +24,12 @@ from .spectral_unmixing import (
 from .tile_alignment import (
     qc_tile_alignment,
 )
+from .cluster_similarity import (
+    compute_cluster_similarity,
+    plot_cluster_similarity,
+    plot_similarity_heatmap,
+    plot_match_summary,
+)
 
 __all__ = [
     "CHANNEL_COLORS",
@@ -49,4 +55,9 @@ __all__ = [
     "plot_channel_intensity_histograms_by_round",
     # cells
     "plot_single_cell_expression_all_rounds",
+    # cluster similarity
+    "compute_cluster_similarity",
+    "plot_cluster_similarity",
+    "plot_similarity_heatmap",
+    "plot_match_summary",
 ]
