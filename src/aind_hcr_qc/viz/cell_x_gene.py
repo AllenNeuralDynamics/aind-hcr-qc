@@ -388,7 +388,7 @@ def plot_cell_x_gene_clustered(
 from sklearn.metrics import silhouette_score
 
 
-def _plot_inhibitory_gene_dist(ax, cxg_pivot, gene, threshold, log_transform, drop_zeros=True):
+def _plot_inhibitory_gene_dist(cxg_pivot, gene, threshold, log_transform,ax=None, drop_zeros=True):
     """
     Plot the per-cell spot-count distribution for one inhibitory gene on a single axis.
 
@@ -416,6 +416,9 @@ def _plot_inhibitory_gene_dist(ax, cxg_pivot, gene, threshold, log_transform, dr
         threshold annotation.
     """
     import seaborn as sns
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 4))
 
     if gene not in cxg_pivot.columns:
         ax.text(0.5, 0.5, f"{gene}\nnot found", ha='center', va='center',
@@ -817,7 +820,7 @@ def fig_mixed_unmixed_cxg_and_corr(
     for col_idx, gene in enumerate(inh_genes):
         ax = fig.add_subplot(gs[3, col_idx])
         threshold = inhibitory_genes[gene]
-        _plot_inhibitory_gene_dist(ax, cxg_mixed, gene, threshold, log_transform)
+        _plot_inhibitory_gene_dist(cxg_mixed, gene, threshold, log_transform, ax=ax)
         if col_idx == 0:
             ax.set_ylabel("Density\n(Mixed)", fontsize=8)
 
@@ -825,7 +828,7 @@ def fig_mixed_unmixed_cxg_and_corr(
     for col_idx, gene in enumerate(inh_genes):
         ax = fig.add_subplot(gs[4, col_idx])
         threshold = inhibitory_genes[gene]
-        _plot_inhibitory_gene_dist(ax, cxg_unmixed, gene, threshold, log_transform)
+        _plot_inhibitory_gene_dist(cxg_unmixed, gene, threshold, log_transform,ax=ax)
         if col_idx == 0:
             ax.set_ylabel("Density\n(Unmixed)", fontsize=8)
 
