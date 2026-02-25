@@ -130,8 +130,43 @@ def spot_count_cell_x_gene_coreg(
 # -------------------------------------------------------------------------------------------------
 
 
+def _build_gene_labels(gene_columns: list, gene_label: str, dataset) -> list:
+    """
+    Build x-axis tick labels for a cell x gene plot.
+
+    Parameters
+    ----------
+    gene_columns : list of str
+        Ordered gene names (column names of the cxg pivot table).
+    gene_label : {'gene', 'round_channel_gene'}
+        'gene'               → return gene_columns unchanged.
+        'round_channel_gene' → map each gene to its "R{n}_ch{ch}_{gene}" label
+                               using the dataset's channel-gene table.
+    dataset : HCRDataset or None
+        Required when gene_label == 'round_channel_gene'.
+
+    Returns
+    -------
+    list of str
+    """
+    if gene_label == 'gene' or dataset is None:
+        return gene_columns
+
+    channel_gene_table = dataset.create_channel_gene_table()
+    if 'round_channel_gene' not in channel_gene_table.columns:
+        # Fallback: build it on the fly if the dataset version is old
+        channel_gene_table['round_channel_gene'] = (
+            channel_gene_table['Round'] + '_ch' + channel_gene_table['Channel'].astype(str)
+            + '_' + channel_gene_table['Gene']
+        )
+
+    gene_to_label = dict(zip(channel_gene_table['Gene'], channel_gene_table['round_channel_gene']))
+    return [gene_to_label.get(g, g) for g in gene_columns]
+
+
 def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None, title=None, 
-                           gene_sort='alphabetical', dataset=None, cbar_label="Transcript count"):
+                           gene_sort='alphabetical', dataset=None, cbar_label="Transcript count",
+                           gene_label='gene'):
     """
     Plot the cell x gene matrix as an image with inverted colormap.
 
@@ -156,7 +191,10 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
         - gene name string: Sort cells by expression of that gene
     dataset : HCRDataset, optional
         Required if gene_sort='round_channel'. Used to get channel-gene mapping.
-
+    gene_label : {'gene', 'round_channel_gene'}, optional
+        Column from the channel-gene table to use as x-axis tick labels.
+        'gene' (default) shows only the gene name; 'round_channel_gene' shows
+        e.g. "R2_ch647_Gad2". Requires ``dataset`` when not 'gene'.
     """
     if not isinstance(cxg, pd.DataFrame):
         raise ValueError("Input cxg must be a pandas DataFrame.")
@@ -190,6 +228,10 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
         if sort_gene not in cxg.columns:
             raise ValueError(f"Gene '{sort_gene}' not found in cell x gene matrix columns.")
         cxg = cxg.sort_values(by=sort_gene, ascending=False)
+
+    # Build x-axis tick labels
+    x_labels = _build_gene_labels(cxg.columns.tolist(), gene_label, dataset)
+
     if ax is None:
         fig, ax = plt.subplots(figsize=fig_size)
 
@@ -207,7 +249,7 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
 
     # add gene names from dataframe
     # plt.yticks(ticks=range(len(cxg.index)), labels=cxg.index)
-    ax.set_xticks(ticks=range(len(cxg.columns)), labels=cxg.columns, rotation=90)
+    ax.set_xticks(ticks=range(len(cxg.columns)), labels=x_labels, rotation=90)
     ax.set_title(title)
     # colorbar
 
@@ -227,6 +269,7 @@ def plot_cell_x_gene_clustered(
     gene_sort='alphabetical',
     dataset=None,
     cluster_sort_gene='Gad2',
+    gene_label='gene',
 ):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
@@ -263,6 +306,10 @@ def plot_cell_x_gene_clustered(
         After KMeans, order the *clusters themselves* by their mean expression of this gene,
         ascending (lowest-expressing cluster at the top, highest at the bottom).
         Default is 'Gad2'. Falls back to total mean expression if the gene is absent.
+    gene_label : {'gene', 'round_channel_gene'}, optional
+        Column from the channel-gene table to use as x-axis tick labels.
+        'gene' (default) shows only the gene name; 'round_channel_gene' shows
+        e.g. "R2_ch647_Gad2". Requires ``dataset`` when not 'gene'.
 
     Returns
     -------
@@ -300,6 +347,9 @@ def plot_cell_x_gene_clustered(
     elif gene_sort is not None and gene_sort != 'alphabetical':
         raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
 
+    # Build x-axis tick labels (after column order is finalised)
+    x_labels = _build_gene_labels(cxg.columns.tolist(), gene_label, dataset)
+
     # Perform clustering or sorting (for rows/cells)
     # Use gene_sort if it's a gene name, otherwise use legacy sort_gene, otherwise cluster
     cell_sort_gene = gene_sort if gene_sort in cxg.columns else sort_gene
@@ -329,12 +379,8 @@ def plot_cell_x_gene_clustered(
         rank_map = {orig: rank for rank, orig in enumerate(sorted_cluster_ids)}
         cxg["_cluster_rank"] = cxg["_cluster"].map(rank_map)
 
-        # Sort rows: first by rank, then by individual cell expression of the sort gene
-        # within each cluster (descending) for a cleaner banding appearance
-        if cluster_sort_gene and cluster_sort_gene in cxg.columns:
-            cxg = cxg.sort_values(["_cluster_rank", cluster_sort_gene], ascending=[True, False])
-        else:
-            cxg = cxg.sort_values("_cluster_rank", ascending=True)
+        # Sort rows by cluster rank only — no within-cluster sorting
+        cxg = cxg.sort_values("_cluster_rank", ascending=True)
 
         # Expose remapped cluster labels (0 = lowest gene-expressing cluster)
         cluster_labels = cxg["_cluster_rank"].values
@@ -362,7 +408,7 @@ def plot_cell_x_gene_clustered(
     cbar.ax.tick_params(labelsize=10)
 
     # add gene names from dataframe
-    ax.set_xticks(ticks=range(len(cxg.columns)), labels=cxg.columns, rotation=90)
+    ax.set_xticks(ticks=range(len(cxg.columns)), labels=x_labels, rotation=90)
 
     # y-axis label
     ax.set_ylabel(y_label, fontsize=9)
@@ -694,7 +740,8 @@ def fig_mixed_unmixed_cxg_and_corr(
                                    dataset=dataset,
                                    cbar_label=cbar_label,
                                    clip_range=(cxg_vmin, cxg_vmax),
-                                   cluster_sort_gene='Gad2')
+                                   cluster_sort_gene='Gad2',
+                                   gene_label="round_channel_gene")
     ax01.set_yticks([0, len(cxg_mixed)])
     ax01.set_yticklabels([0, len(cxg_mixed)])
     
@@ -706,7 +753,8 @@ def fig_mixed_unmixed_cxg_and_corr(
                                        dataset=dataset,
                                        cbar_label=cbar_label,
                                        clip_range=(cxg_vmin, cxg_vmax),
-                                       cluster_sort_gene='Gad2')
+                                       cluster_sort_gene='Gad2',
+                                       gene_label="round_channel_gene")
         ax02.set_yticks([0, len(cxg_mixed_inhib)])
         ax02.set_yticklabels([0, len(cxg_mixed_inhib)])
     else:
@@ -733,7 +781,8 @@ def fig_mixed_unmixed_cxg_and_corr(
                                    dataset=dataset,
                                    cbar_label=cbar_label,
                                    clip_range=(cxg_vmin, cxg_vmax),
-                                   cluster_sort_gene='Gad2')
+                                   cluster_sort_gene='Gad2',
+                                   gene_label="round_channel_gene")
     ax11.set_yticks([0, len(cxg_unmixed)])
     ax11.set_yticklabels([0, len(cxg_unmixed)])
     
@@ -745,7 +794,8 @@ def fig_mixed_unmixed_cxg_and_corr(
                                        dataset=dataset,
                                        cbar_label=cbar_label,
                                        clip_range=(cxg_vmin, cxg_vmax),
-                                       cluster_sort_gene='Gad2')
+                                       cluster_sort_gene='Gad2',
+                                       gene_label="round_channel_gene")
         ax12.set_yticks([0, len(cxg_unmixed_inhib)])
         ax12.set_yticklabels([0, len(cxg_unmixed_inhib)])
     else:
