@@ -226,7 +226,7 @@ def plot_cell_x_gene_clustered(
     ax=None,
     gene_sort='alphabetical',
     dataset=None,
-    within_cluster_sort_gene='Gad2',
+    cluster_sort_gene='Gad2',
 ):
     """
     Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
@@ -259,9 +259,10 @@ def plot_cell_x_gene_clustered(
         - gene name string: Sort cells by expression of that gene
     dataset : HCRDataset, optional
         Required if gene_sort='round_channel'. Used to get channel-gene mapping.
-    within_cluster_sort_gene : str, optional
-        When clustering, sort cells within each cluster by descending expression of this gene.
-        Default is 'Gad2'. If the gene is not present in cxg, falls back to total expression.
+    cluster_sort_gene : str, optional
+        After KMeans, order the *clusters themselves* by their mean expression of this gene,
+        ascending (lowest-expressing cluster at the top, highest at the bottom).
+        Default is 'Gad2'. Falls back to total mean expression if the gene is absent.
 
     Returns
     -------
@@ -314,25 +315,38 @@ def plot_cell_x_gene_clustered(
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
         cluster_labels = kmeans.fit_predict(cxg.values)
 
-        # Sort by cluster label, then within each cluster by within_cluster_sort_gene
-        # (or total expression if gene not present)
-        cxg["cluster"] = cluster_labels
-        if within_cluster_sort_gene and within_cluster_sort_gene in cxg.columns:
-            cxg["_sort_within"] = cxg[within_cluster_sort_gene]
+        # --- Sort clusters by their mean expression of cluster_sort_gene ---
+        # (lowest mean → top of plot, highest mean → bottom)
+        cxg["_cluster"] = cluster_labels
+        if cluster_sort_gene and cluster_sort_gene in cxg.columns:
+            cluster_means = cxg.groupby("_cluster")[cluster_sort_gene].mean()
         else:
-            cxg["_sort_within"] = cxg.drop("cluster", axis=1).sum(axis=1)
-        cxg = cxg.sort_values(["cluster", "_sort_within"], ascending=[True, False])
+            # fall back to total mean expression per cluster
+            cluster_means = cxg.drop(columns=["_cluster"]).assign(_cluster=cluster_labels).groupby("_cluster").mean().mean(axis=1)
 
-        # Update cluster labels to match the sorted order
-        cluster_labels = cxg["cluster"].values
+        # Map original cluster id → rank (0 = lowest mean, k-1 = highest mean)
+        sorted_cluster_ids = cluster_means.sort_values(ascending=True).index
+        rank_map = {orig: rank for rank, orig in enumerate(sorted_cluster_ids)}
+        cxg["_cluster_rank"] = cxg["_cluster"].map(rank_map)
 
-        # Store the sorted cell IDs before dropping helper columns
+        # Sort rows: first by rank, then by individual cell expression of the sort gene
+        # within each cluster (descending) for a cleaner banding appearance
+        if cluster_sort_gene and cluster_sort_gene in cxg.columns:
+            cxg = cxg.sort_values(["_cluster_rank", cluster_sort_gene], ascending=[True, False])
+        else:
+            cxg = cxg.sort_values("_cluster_rank", ascending=True)
+
+        # Expose remapped cluster labels (0 = lowest gene-expressing cluster)
+        cluster_labels = cxg["_cluster_rank"].values
+
+        # Store sorted cell IDs before dropping helper columns
         sorted_cell_ids = cxg.index
 
         # Remove helper columns
-        cxg = cxg.drop(["cluster", "_sort_within"], axis=1)
+        cxg = cxg.drop(columns=["_cluster", "_cluster_rank"])
 
-        y_label = "Cells sorted by cluster ID"
+        sort_label = cluster_sort_gene if cluster_sort_gene and cluster_sort_gene in cxg.columns else "total expr"
+        y_label = f"Cells (clusters sorted by mean {sort_label} ↑)"
 
     if ax is None:
         fig, ax = plt.subplots(figsize=fig_size)
@@ -679,7 +693,8 @@ def fig_mixed_unmixed_cxg_and_corr(
                                    gene_sort='round_channel',
                                    dataset=dataset,
                                    cbar_label=cbar_label,
-                                   clip_range=(cxg_vmin, cxg_vmax))
+                                   clip_range=(cxg_vmin, cxg_vmax),
+                                   cluster_sort_gene='Gad2')
     ax01.set_yticks([0, len(cxg_mixed)])
     ax01.set_yticklabels([0, len(cxg_mixed)])
     
@@ -690,7 +705,8 @@ def fig_mixed_unmixed_cxg_and_corr(
                                        title=f"Mixed Inhibitory Cells (n={len(cxg_mixed_inhib)}, k={mixed_inhib_k})",
                                        dataset=dataset,
                                        cbar_label=cbar_label,
-                                       clip_range=(cxg_vmin, cxg_vmax))
+                                       clip_range=(cxg_vmin, cxg_vmax),
+                                       cluster_sort_gene='Gad2')
         ax02.set_yticks([0, len(cxg_mixed_inhib)])
         ax02.set_yticklabels([0, len(cxg_mixed_inhib)])
     else:
@@ -716,7 +732,8 @@ def fig_mixed_unmixed_cxg_and_corr(
                                    gene_sort='round_channel',
                                    dataset=dataset,
                                    cbar_label=cbar_label,
-                                   clip_range=(cxg_vmin, cxg_vmax))
+                                   clip_range=(cxg_vmin, cxg_vmax),
+                                   cluster_sort_gene='Gad2')
     ax11.set_yticks([0, len(cxg_unmixed)])
     ax11.set_yticklabels([0, len(cxg_unmixed)])
     
@@ -727,7 +744,8 @@ def fig_mixed_unmixed_cxg_and_corr(
                                        title=f"Unmixed Inhibitory Cells (n={len(cxg_unmixed_inhib)}, k={unmixed_inhib_k})",
                                        dataset=dataset,
                                        cbar_label=cbar_label,
-                                       clip_range=(cxg_vmin, cxg_vmax))
+                                       clip_range=(cxg_vmin, cxg_vmax),
+                                       cluster_sort_gene='Gad2')
         ax12.set_yticks([0, len(cxg_unmixed_inhib)])
         ax12.set_yticklabels([0, len(cxg_unmixed_inhib)])
     else:

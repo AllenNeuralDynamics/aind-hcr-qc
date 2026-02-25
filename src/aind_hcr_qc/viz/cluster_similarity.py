@@ -406,7 +406,7 @@ def plot_similarity_heatmap(
     ax.set_title(title, fontsize=12)
     ax.set_xlabel(label_b, fontsize=10)
     ax.set_ylabel(label_a, fontsize=10)
-    ax.tick_params(axis="x", rotation=45)
+    ax.tick_params(axis="x", rotation=90)
     ax.tick_params(axis="y", rotation=0)
     fig.tight_layout()
     return fig
