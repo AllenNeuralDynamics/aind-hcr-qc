@@ -592,8 +592,14 @@ def fig_mixed_unmixed_cxg_and_corr(
         Dictionary containing:
         - 'mixed_k': optimal k for mixed
         - 'unmixed_k': optimal k for unmixed
-        - 'mixed_labels': cluster labels for mixed
-        - 'unmixed_labels': cluster labels for unmixed
+        - 'mixed_labels': raw KMeans cluster labels for mixed (aligned to cxg_mixed_pivot row order)
+        - 'unmixed_labels': raw KMeans cluster labels for unmixed (aligned to cxg_unmixed_pivot row order)
+        - 'mixed_labels_ranked': cluster labels remapped by mean Gad2 expression rank (same row order)
+        - 'unmixed_labels_ranked': cluster labels remapped by mean Gad2 expression rank (same row order)
+        - 'mixed_sorted_cell_ids': cell_id index in plot row order (sorted by cluster rank)
+        - 'unmixed_sorted_cell_ids': cell_id index in plot row order (sorted by cluster rank)
+        - 'cxg_mixed_pivot': pivot cell x gene DataFrame for mixed (cell_id x gene)
+        - 'cxg_unmixed_pivot': pivot cell x gene DataFrame for unmixed (cell_id x gene)
         - 'mixed_inhibitory_count': number of inhibitory cells in mixed
         - 'unmixed_inhibitory_count': number of inhibitory cells in unmixed
     """
@@ -734,7 +740,8 @@ def fig_mixed_unmixed_cxg_and_corr(
     ax00.set_yticklabels([0, len(cxg_mixed)])
     
     # Plot 2: Mixed clustered
-    plot_cell_x_gene_clustered(cxg_mixed, ax=ax01, k=mixed_k, 
+    _, mixed_labels_ranked, mixed_sorted_cell_ids = plot_cell_x_gene_clustered(
+                                   cxg_mixed, ax=ax01, k=mixed_k, 
                                    title=f"Mixed Clustered (k={mixed_k})",
                                    gene_sort='round_channel',
                                    dataset=dataset,
@@ -775,7 +782,8 @@ def fig_mixed_unmixed_cxg_and_corr(
     ax10.set_yticklabels([0, len(cxg_unmixed)])
     
     # Plot 5: Unmixed clustered
-    plot_cell_x_gene_clustered(cxg_unmixed, ax=ax11, k=unmixed_k,
+    _, unmixed_labels_ranked, unmixed_sorted_cell_ids = plot_cell_x_gene_clustered(
+                                   cxg_unmixed, ax=ax11, k=unmixed_k,
                                    title=f"Unmixed Clustered (k={unmixed_k})",
                                    gene_sort='round_channel',
                                    dataset=dataset,
@@ -904,12 +912,24 @@ def fig_mixed_unmixed_cxg_and_corr(
     fig.suptitle('Mixed vs Unmixed Comparison with Clustering and Correlation Analysis', 
                 fontsize=14, y=0.995)
     
+    # Reindex pivots to match the row order that ranked labels were computed against.
+    # plot_cell_x_gene_clustered sorts rows internally; mixed_labels_ranked[i] corresponds
+    # to mixed_sorted_cell_ids[i], NOT to the original cxg_mixed row order.
+    cxg_mixed_pivot_sorted   = cxg_mixed.loc[mixed_sorted_cell_ids]
+    cxg_unmixed_pivot_sorted = cxg_unmixed.loc[unmixed_sorted_cell_ids]
+
     # Prepare results dictionary
     results = {
         'mixed_k': mixed_k,
         'unmixed_k': unmixed_k,
         'mixed_labels': mixed_labels,
         'unmixed_labels': unmixed_labels,
+        'mixed_labels_ranked': mixed_labels_ranked,
+        'unmixed_labels_ranked': unmixed_labels_ranked,
+        'mixed_sorted_cell_ids': mixed_sorted_cell_ids,
+        'unmixed_sorted_cell_ids': unmixed_sorted_cell_ids,
+        'cxg_mixed_pivot': cxg_mixed_pivot_sorted,
+        'cxg_unmixed_pivot': cxg_unmixed_pivot_sorted,
         'mixed_inhibitory_count': mixed_inhibitory_mask.sum() if cxg_mixed_inhib is not None else 0,
         'unmixed_inhibitory_count': unmixed_inhibitory_mask.sum() if cxg_unmixed_inhib is not None else 0
     }
