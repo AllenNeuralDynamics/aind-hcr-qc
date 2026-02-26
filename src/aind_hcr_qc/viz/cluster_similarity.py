@@ -16,6 +16,7 @@ import pandas as pd
 import seaborn as sns
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import StandardScaler
 
 
 # -------------------------------------------------------------------------------------------------
@@ -122,6 +123,7 @@ def compute_similarity_matrix(
     centroids_a: np.ndarray,
     centroids_b: np.ndarray,
     metric: str = "cosine",
+    scale: bool = False,
 ) -> np.ndarray:
     """
     Compute pairwise similarity between two sets of cluster centroids.
@@ -132,12 +134,22 @@ def compute_similarity_matrix(
     centroids_b : np.ndarray, shape (n_b, n_genes)
     metric : {'cosine', 'pearson'}
         Similarity metric to use.
+    scale : bool
+        If True, z-score each gene across all centroids (A and B jointly) via
+        ``StandardScaler`` before computing cosine similarity.  Has no effect
+        when ``metric='pearson'`` (pearson already z-scores per centroid row).
 
     Returns
     -------
     np.ndarray, shape (n_a, n_b)
     """
     if metric == "cosine":
+        if scale:
+            all_centroids = np.vstack([centroids_a, centroids_b])
+            scaler = StandardScaler()
+            all_scaled = scaler.fit_transform(all_centroids)
+            centroids_a = all_scaled[:len(centroids_a)]
+            centroids_b = all_scaled[len(centroids_a):]
         return cosine_similarity(centroids_a, centroids_b)
     elif metric == "pearson":
         def _zscore(X):
@@ -242,6 +254,7 @@ def compute_cluster_similarity(
     use_size_weights: bool = False,
     log_transform: bool = False,
     clip_range: Optional[tuple[float, float]] = None,
+    scale: bool = False,
 ) -> dict:
     """
     End-to-end processing: prepare matrices -> centroids -> similarity -> matches.
@@ -262,6 +275,9 @@ def compute_cluster_similarity(
         Apply ``log1p`` before computing centroids.
     clip_range : tuple of (min, max), optional
         Clip expression values before optional log-transform.
+    scale : bool
+        If True, z-score each gene across all centroids (A and B jointly) before
+        computing cosine similarity.  Has no effect when ``metric='pearson'``.
 
     Returns
     -------
@@ -292,7 +308,7 @@ def compute_cluster_similarity(
     centroids_a, sizes_a, ids_a = compute_cluster_centroids(mat_a, labels_a)
     centroids_b, sizes_b, ids_b = compute_cluster_centroids(mat_b, labels_b)
 
-    sim_matrix = compute_similarity_matrix(centroids_a, centroids_b, metric=metric)
+    sim_matrix = compute_similarity_matrix(centroids_a, centroids_b, metric=metric, scale=scale)
 
     weighted_matrix = None
     if use_size_weights:
@@ -482,6 +498,7 @@ def plot_cluster_similarity(
     clip_range: Optional[tuple[float, float]] = None,
     similarity_threshold: float = 0.8,
     figsize: tuple[float, float] = (16, 6),
+    scale: bool = False,
 ) -> tuple[dict, plt.Figure]:
     """
     Convenience function: full pipeline + side-by-side heatmap and match summary.
@@ -507,6 +524,10 @@ def plot_cluster_similarity(
         Threshold line in the match-summary bar chart.
     figsize : tuple
         Total figure size for the 1x2 layout.
+    scale : bool
+        If True, z-score each gene across all centroids (A and B jointly) via
+        ``StandardScaler`` before computing cosine similarity.
+        Has no effect when ``metric='pearson'``.
 
     Returns
     -------
@@ -524,6 +545,7 @@ def plot_cluster_similarity(
         use_size_weights=use_size_weights,
         log_transform=log_transform,
         clip_range=clip_range,
+        scale=scale,
     )
 
     fig, (ax_hm, ax_bar) = plt.subplots(1, 2, figsize=figsize)
@@ -545,6 +567,8 @@ def plot_cluster_similarity(
     )
 
     title_parts = [f"Cluster Similarity  |  {label_a}  vs  {label_b}  |  metric={metric}"]
+    if scale:
+        title_parts.append("scaled")
     if use_size_weights:
         title_parts.append("size-weighted")
     if log_transform:
