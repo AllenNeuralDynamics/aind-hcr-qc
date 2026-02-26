@@ -1919,7 +1919,7 @@ def plot_gmm_marker_subgene_analysis(
 # 9. End-to-end inhibitory gene thresholding pipeline
 # -------------------------------------------------------------------------------------------------
 
-_DEFAULT_ANCHOR_GENES = ("Pvalb", "Sst", "Vip", "Npy")
+_DEFAULT_ANCHOR_GENES = ("Pvalb", "Sst", "Npy","Vip")
 
 
 def run_inhibitory_gmm_thresholding(
