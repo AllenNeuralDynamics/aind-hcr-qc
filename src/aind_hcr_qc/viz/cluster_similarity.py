@@ -793,3 +793,454 @@ def plot_cluster_similarity(
     fig.suptitle("  |  ".join(title_parts), fontsize=12, y=1.01)
     fig.tight_layout()
     return result, fig
+
+
+# =================================================================================================
+# Comparisons across cluster pairs analysis
+#
+# Functions for running all pairwise comparisons across a collection of mice/conditions
+# and summarising the variability in cluster similarity scores.
+#
+# Workflow:
+#   1. run_pairwise_comparisons        — run compute_cluster_similarity for every (A, B) pair
+#   2. summarise_pairwise_comparisons  — collapse each comparison to mean/median/match_rate
+#   3. plot_similarity_matrix_heatmap  — N×N heatmap of summary scores
+#   4. plot_similarity_swarm           — swarm/strip plot of per-cluster scores per comparison
+#   5. plot_per_cluster_variability    — bar chart of per-cluster std across all comparisons
+#   6. plot_pairwise_comparison_summary — combined figure with all three panels
+# =================================================================================================
+
+
+def run_pairwise_comparisons(
+    mouse_data: dict,
+    metric: str = "pearson",
+    use_size_weights: bool = False,
+    log_transform: bool = True,
+    clip_range: Optional[tuple[float, float]] = None,
+    scale: bool = True,
+) -> dict:
+    """
+    Run :func:`compute_cluster_similarity` for every unique pair of mice/conditions.
+
+    Parameters
+    ----------
+    mouse_data : dict
+        Mapping of ``label -> (cxg_pivot, cluster_labels)``.
+        Example::
+
+            {
+                "767022": (final_cxg_767022, cluster_labels_767022),
+                "755252": (final_cxg_755252, cluster_labels_755252),
+            }
+
+    metric : str
+        Similarity metric passed to :func:`compute_cluster_similarity`.
+    use_size_weights : bool
+        Weight matching by cluster-size concordance.
+    log_transform : bool
+        Apply ``log1p`` before computing centroids.
+    clip_range : tuple, optional
+        Clip expression values before optional log-transform.
+    scale : bool
+        Z-score genes across all centroids before cosine similarity.
+
+    Returns
+    -------
+    dict
+        Keys are ``"label_a vs label_b"`` strings; values are the result dicts
+        from :func:`compute_cluster_similarity`, each augmented with
+        ``"label_a"`` and ``"label_b"`` string fields.
+    """
+    labels = list(mouse_data.keys())
+    comparison_results = {}
+
+    for i in range(len(labels)):
+        for j in range(i + 1, len(labels)):
+            label_a, label_b = labels[i], labels[j]
+            cxg_a, labs_a = mouse_data[label_a]
+            cxg_b, labs_b = mouse_data[label_b]
+
+            print(f"  Running: {label_a}  vs  {label_b}")
+            result = compute_cluster_similarity(
+                cxg_a=cxg_a,
+                labels_a=labs_a,
+                cxg_b=cxg_b,
+                labels_b=labs_b,
+                metric=metric,
+                use_size_weights=use_size_weights,
+                log_transform=log_transform,
+                clip_range=clip_range,
+                scale=scale,
+            )
+            result["label_a"] = label_a
+            result["label_b"] = label_b
+            key = f"{label_a} vs {label_b}"
+            comparison_results[key] = result
+
+    print(f"\nCompleted {len(comparison_results)} pairwise comparisons.")
+    return comparison_results
+
+
+def summarise_pairwise_comparisons(
+    comparison_results: dict,
+    similarity_threshold: float = 0.8,
+) -> pd.DataFrame:
+    """
+    Collapse each pairwise comparison to summary statistics.
+
+    Parameters
+    ----------
+    comparison_results : dict
+        Output of :func:`run_pairwise_comparisons`.
+    similarity_threshold : float
+        A cluster match is "good" if its similarity >= this value.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per comparison.  Columns:
+
+        ``comparison``       — "label_a vs label_b"
+        ``label_a``          — mouse/condition A
+        ``label_b``          — mouse/condition B
+        ``mean_similarity``  — mean across all matched cluster pairs
+        ``median_similarity``— median across all matched cluster pairs
+        ``std_similarity``   — std across all matched cluster pairs
+        ``match_rate``       — fraction of pairs with similarity >= threshold
+        ``n_clusters``       — number of matched pairs
+    """
+    rows = []
+    for key, result in comparison_results.items():
+        scores = result["match_df"]["similarity"].values
+        rows.append({
+            "comparison": key,
+            "label_a": result["label_a"],
+            "label_b": result["label_b"],
+            "mean_similarity": float(scores.mean()),
+            "median_similarity": float(np.median(scores)),
+            "std_similarity": float(scores.std()),
+            "match_rate": float((scores >= similarity_threshold).mean()),
+            "n_clusters": len(scores),
+        })
+    return pd.DataFrame(rows).sort_values("mean_similarity", ascending=False).reset_index(drop=True)
+
+
+def _build_all_scores_df(comparison_results: dict) -> pd.DataFrame:
+    """
+    Flatten all per-cluster similarity scores into a single long-form DataFrame.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: comparison, label_a, label_b, cluster_a, cluster_b, similarity
+    """
+    rows = []
+    for key, result in comparison_results.items():
+        for _, r in result["match_df"].iterrows():
+            rows.append({
+                "comparison": key,
+                "label_a": result["label_a"],
+                "label_b": result["label_b"],
+                "cluster_a": r["cluster_a"],
+                "cluster_b": r["cluster_b"],
+                "similarity": r["similarity"],
+            })
+    return pd.DataFrame(rows)
+
+
+def plot_similarity_matrix_heatmap(
+    summary_df: pd.DataFrame,
+    score_col: str = "mean_similarity",
+    ax: Optional[plt.Axes] = None,
+    figsize: tuple[float, float] = (7, 6),
+    cmap: str = "YlGnBu",
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    title: Optional[str] = None,
+) -> plt.Figure:
+    """
+    Symmetric N×N heatmap of pairwise mean similarity scores.
+
+    Parameters
+    ----------
+    summary_df : pd.DataFrame
+        Output of :func:`summarise_pairwise_comparisons`.
+    score_col : str
+        Column from *summary_df* to use as the cell value
+        (e.g. ``'mean_similarity'``, ``'match_rate'``).
+    ax : plt.Axes, optional
+    figsize : tuple
+    cmap : str
+    vmin, vmax : float
+        Colour scale limits.
+    title : str, optional
+
+    Returns
+    -------
+    plt.Figure
+    """
+    # Build symmetric matrix
+    all_labels = sorted(set(summary_df["label_a"]) | set(summary_df["label_b"]))
+    n = len(all_labels)
+    idx = {l: i for i, l in enumerate(all_labels)}
+    mat = np.full((n, n), np.nan)
+    np.fill_diagonal(mat, 1.0)
+
+    for _, row in summary_df.iterrows():
+        i, j = idx[row["label_a"]], idx[row["label_b"]]
+        mat[i, j] = row[score_col]
+        mat[j, i] = row[score_col]
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    sns.heatmap(
+        mat,
+        annot=True,
+        fmt=".2f",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        xticklabels=all_labels,
+        yticklabels=all_labels,
+        linewidths=0.5,
+        linecolor="white",
+        ax=ax,
+    )
+    ax.set_title(title or f"Pairwise {score_col.replace('_', ' ').title()}", fontsize=12)
+    ax.tick_params(axis="x", rotation=45)
+    ax.tick_params(axis="y", rotation=0)
+    fig.tight_layout()
+    return fig
+
+
+def plot_similarity_swarm(
+    comparison_results: dict,
+    similarity_threshold: float = 0.8,
+    ax: Optional[plt.Axes] = None,
+    figsize: tuple[float, float] = (10, 5),
+    title: Optional[str] = None,
+) -> plt.Figure:
+    """
+    Strip/swarm plot of per-cluster similarity scores, one column per comparison.
+
+    Each dot is one matched cluster pair.  A box overlay shows the median and
+    IQR.  A dashed horizontal line marks the similarity threshold.
+
+    Parameters
+    ----------
+    comparison_results : dict
+        Output of :func:`run_pairwise_comparisons`.
+    similarity_threshold : float
+        Dashed reference line position.
+    ax : plt.Axes, optional
+    figsize : tuple
+    title : str, optional
+
+    Returns
+    -------
+    plt.Figure
+    """
+    scores_df = _build_all_scores_df(comparison_results)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    comparison_order = list(comparison_results.keys())
+
+    sns.boxplot(
+        data=scores_df,
+        x="comparison",
+        y="similarity",
+        order=comparison_order,
+        color="lightgrey",
+        width=0.4,
+        fliersize=0,
+        ax=ax,
+    )
+    sns.stripplot(
+        data=scores_df,
+        x="comparison",
+        y="similarity",
+        order=comparison_order,
+        jitter=True,
+        size=6,
+        alpha=0.7,
+        palette="tab10",
+        hue="comparison",
+        legend=False,
+        ax=ax,
+    )
+    ax.axhline(similarity_threshold, color="red", linestyle="--", linewidth=1.2,
+               label=f"threshold = {similarity_threshold}")
+    ax.set_ylim(0, 1.05)
+    ax.set_xlabel("")
+    ax.set_ylabel("Cluster similarity score")
+    ax.set_title(title or "Per-cluster similarity scores per pairwise comparison", fontsize=11)
+    ax.tick_params(axis="x", rotation=30)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def plot_per_cluster_variability(
+    comparison_results: dict,
+    ax: Optional[plt.Axes] = None,
+    figsize: tuple[float, float] = (10, 4),
+    title: Optional[str] = None,
+    color_threshold: float = 0.15,
+) -> plt.Figure:
+    """
+    Bar chart of per-cluster-A std of similarity across all comparisons.
+
+    A high std for a cluster means its match quality varies a lot across
+    mouse pairs — it is an unstable cluster type.  A low std means it
+    matches consistently well (or consistently poorly).
+
+    Parameters
+    ----------
+    comparison_results : dict
+        Output of :func:`run_pairwise_comparisons`.
+    ax : plt.Axes, optional
+    figsize : tuple
+    title : str, optional
+    color_threshold : float
+        Bars with std >= this value are coloured orange (high variability);
+        below are blue (stable).
+
+    Returns
+    -------
+    plt.Figure
+    """
+    scores_df = _build_all_scores_df(comparison_results)
+
+    # group by cluster_a — std of similarity across comparisons it appears in
+    cluster_stats = (
+        scores_df.groupby("cluster_a")["similarity"]
+        .agg(mean_sim="mean", std_sim="std", n_comparisons="count")
+        .reset_index()
+        .sort_values("cluster_a")
+    )
+    cluster_stats["std_sim"] = cluster_stats["std_sim"].fillna(0)
+
+    colors = [
+        "#FF9800" if s >= color_threshold else "#5B9BD5"
+        for s in cluster_stats["std_sim"]
+    ]
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.get_figure()
+
+    bars = ax.bar(
+        cluster_stats["cluster_a"].astype(str),
+        cluster_stats["std_sim"],
+        color=colors,
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    ax.axhline(color_threshold, color="red", linestyle="--", linewidth=1.2,
+               label=f"variability threshold = {color_threshold}")
+
+    # annotate mean similarity above each bar
+    for bar, mean_val in zip(bars, cluster_stats["mean_sim"]):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.005,
+            f"{mean_val:.2f}",
+            ha="center", va="bottom", fontsize=7, color="grey",
+        )
+
+    ax.set_xlabel("Cluster (A label)")
+    ax.set_ylabel("Std of similarity\nacross comparisons")
+    ax.set_title(title or "Per-cluster variability across pairwise comparisons\n(annotated with mean similarity)",
+                 fontsize=11)
+    ax.legend(fontsize=8)
+    ax.set_ylim(0, max(cluster_stats["std_sim"].max() * 1.3, color_threshold * 1.5))
+    fig.tight_layout()
+    return fig
+
+
+def plot_pairwise_comparison_summary(
+    comparison_results: dict,
+    similarity_threshold: float = 0.8,
+    score_col: str = "mean_similarity",
+    figsize: tuple[float, float] = (20, 14),
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    color_threshold: float = 0.15,
+) -> tuple[plt.Figure, pd.DataFrame]:
+    """
+    Combined three-panel summary figure for multi-mouse pairwise comparisons.
+
+    Panels
+    ------
+    Top-left  : N×N heatmap of pairwise mean similarity.
+    Top-right : Swarm + box plot of per-cluster scores per comparison.
+    Bottom    : Per-cluster std bar chart with mean similarity annotations.
+
+    Parameters
+    ----------
+    comparison_results : dict
+        Output of :func:`run_pairwise_comparisons`.
+    similarity_threshold : float
+        Reference line in the swarm plot.
+    score_col : str
+        Column to use in the N×N heatmap
+        (``'mean_similarity'``, ``'median_similarity'``, or ``'match_rate'``).
+    figsize : tuple
+        Overall figure size.
+    vmin, vmax : float
+        Colour scale for the N×N heatmap.
+    color_threshold : float
+        Std threshold for colouring bars in the variability chart.
+
+    Returns
+    -------
+    fig : plt.Figure
+    summary_df : pd.DataFrame
+        Output of :func:`summarise_pairwise_comparisons`.
+    """
+    summary_df = summarise_pairwise_comparisons(
+        comparison_results,
+        similarity_threshold=similarity_threshold,
+    )
+
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(2, 2, hspace=0.45, wspace=0.35,
+                          height_ratios=[1.2, 1])
+
+    ax_heatmap = fig.add_subplot(gs[0, 0])
+    ax_swarm   = fig.add_subplot(gs[0, 1])
+    ax_var     = fig.add_subplot(gs[1, :])
+
+    plot_similarity_matrix_heatmap(
+        summary_df,
+        score_col=score_col,
+        ax=ax_heatmap,
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+    plot_similarity_swarm(
+        comparison_results,
+        similarity_threshold=similarity_threshold,
+        ax=ax_swarm,
+    )
+
+    plot_per_cluster_variability(
+        comparison_results,
+        ax=ax_var,
+        color_threshold=color_threshold,
+    )
+
+    fig.suptitle(
+        "Pairwise cluster similarity summary across mice/conditions",
+        fontsize=14, y=1.01,
+    )
+    return fig, summary_df
