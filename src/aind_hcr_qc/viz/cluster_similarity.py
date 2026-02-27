@@ -1077,13 +1077,20 @@ def plot_similarity_swarm(
         legend=False,
         ax=ax,
     )
-    ax.axhline(similarity_threshold, color="red", linestyle="--", linewidth=1.2,
+    ax.axhline(similarity_threshold, color="grey", linestyle="--", linewidth=1.2,
                label=f"threshold = {similarity_threshold}")
     ax.set_ylim(0, 1.05)
     ax.set_xlabel("")
     ax.set_ylabel("Cluster similarity score")
     ax.set_title(title or "Per-cluster similarity scores per pairwise comparison", fontsize=11)
-    ax.tick_params(axis="x", rotation=30)
+    # Break the "A vs B" label onto three lines so they render horizontally
+    ax.set_xticks(range(len(comparison_order)))
+    ax.set_xticklabels(
+        [c.replace(" vs ", "\nvs\n") for c in comparison_order],
+        rotation=0,
+        ha="center",
+        fontsize=8,
+    )
     ax.legend(fontsize=8)
     fig.tight_layout()
     return fig
