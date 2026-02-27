@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.ndimage import gaussian_filter1d
-from sklearn.cluster import KMeans
+from scipy.cluster.hierarchy import linkage, optimal_leaf_ordering, leaves_list, fcluster
+from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.mixture import GaussianMixture
 from aind_hcr_qc.utils.utils import saveable_plot
 import aind_hcr_data_loader.filters as hcr_filters
@@ -258,12 +259,141 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     return ax
 
 
+def cluster_cells(
+    cxg,
+    method="kmeans",
+    k=None,
+    cluster_sort_gene="Gad2",
+    random_state=42,
+    linkage_method="ward",
+    metric="euclidean",
+    n_clusters_ward=None,
+):
+    """
+    Cluster (or order) cells in a pre-processed cell × gene matrix.
+
+    Parameters
+    ----------
+    cxg : pd.DataFrame
+        Pre-processed cell × gene matrix.  Should already have NaNs filled,
+        be cast to int and clipped — i.e. the same state as the data inside
+        ``plot_cell_x_gene_clustered`` just before the clustering block.
+    method : {'kmeans', 'agglomerative', 'ward_leaf'}
+        Clustering algorithm to use:
+
+        ``'kmeans'``
+            Scikit-learn KMeans.  Requires ``k``.
+        ``'agglomerative'``
+            Scikit-learn AgglomerativeClustering with Ward linkage.  Requires ``k``.
+            Clusters are subsequently sorted by mean expression of
+            ``cluster_sort_gene`` (ascending), matching KMeans behaviour.
+        ``'ward_leaf'``
+            SciPy hierarchical Ward linkage with optimal-leaf ordering.
+            Produces a continuous row ordering that groups similar cells
+            together — no discrete cluster IDs are assigned unless you also
+            pass ``n_clusters_ward``.  ``cluster_sort_gene`` is ignored.
+    k : int, optional
+        Number of clusters.  Required for ``'kmeans'`` and ``'agglomerative'``.
+        Ignored by ``'ward_leaf'``.
+    cluster_sort_gene : str, optional
+        After ``'kmeans'`` or ``'agglomerative'`` clustering, reorder the
+        cluster IDs so that cluster 0 has the *lowest* mean expression of
+        this gene and the highest-numbered cluster has the most.  Falls back
+        to total mean expression when the gene is absent.  Default ``'Gad2'``.
+    random_state : int, optional
+        Random seed for KMeans (default 42).
+    linkage_method : str, optional
+        Linkage criterion passed to
+        ``scipy.cluster.hierarchy.linkage`` (default ``'ward'``).
+        Only used by ``'ward_leaf'``.
+    metric : str, optional
+        Distance metric passed to
+        ``scipy.cluster.hierarchy.linkage`` (default ``'euclidean'``).
+        Only used by ``'ward_leaf'``.
+    n_clusters_ward : int, optional
+        If provided, cut the ``'ward_leaf'`` dendrogram into this many flat
+        clusters via ``scipy.cluster.hierarchy.fcluster``.  The resulting
+        integer cluster IDs are returned in ``cluster_labels``; if ``None``
+        (default) ``cluster_labels`` will be ``None``.
+
+    Returns
+    -------
+    sorted_cxg : pd.DataFrame
+        A copy of ``cxg`` with rows reordered according to the clustering.
+    cluster_labels : np.ndarray or None
+        Integer cluster assignment for each row of ``sorted_cxg``
+        (same length, same order).  ``None`` for ``'ward_leaf'`` when
+        ``n_clusters_ward`` is not supplied.
+    sorted_cell_ids : pd.Index
+        Row index of ``sorted_cxg`` — useful for downstream alignment.
+    """
+    if method in ("kmeans", "agglomerative") and k is None:
+        raise ValueError(f"method='{method}' requires k to be specified.")
+
+    cxg = cxg.copy()
+
+    if method == "kmeans":
+        kmeans = KMeans(n_clusters=k, random_state=random_state, n_init=10)
+        raw_labels = kmeans.fit_predict(cxg.values)
+
+    elif method == "agglomerative":
+        agg = AgglomerativeClustering(n_clusters=k, linkage="ward")
+        raw_labels = agg.fit_predict(cxg.values)
+
+    elif method == "ward_leaf":
+        Z = linkage(cxg.values, method=linkage_method, metric=metric)
+        Z_opt = optimal_leaf_ordering(Z, cxg.values)
+        ordered_indices = leaves_list(Z_opt)
+        sorted_cxg = cxg.iloc[ordered_indices].copy()
+
+        if n_clusters_ward is not None:
+            flat = fcluster(Z_opt, t=n_clusters_ward, criterion="maxclust")
+            # flat labels are 1-based and in original row order; reindex to sorted order
+            cluster_labels = flat[ordered_indices] - 1  # make 0-based
+        else:
+            cluster_labels = None
+
+        return sorted_cxg, cluster_labels, sorted_cxg.index
+
+    else:
+        raise ValueError(
+            f"Unknown clustering method '{method}'. "
+            "Choose from: 'kmeans', 'agglomerative', 'ward_leaf'."
+        )
+
+    # --- Shared post-processing for kmeans / agglomerative ---
+    # Sort clusters by mean expression of cluster_sort_gene (ascending)
+    cxg["_cluster"] = raw_labels
+    if cluster_sort_gene and cluster_sort_gene in cxg.columns:
+        cluster_means = cxg.groupby("_cluster")[cluster_sort_gene].mean()
+    else:
+        cluster_means = (
+            cxg.drop(columns=["_cluster"])
+            .groupby(raw_labels)
+            .mean()
+            .mean(axis=1)
+        )
+
+    sorted_cluster_ids = cluster_means.sort_values(ascending=True).index
+    rank_map = {orig: rank for rank, orig in enumerate(sorted_cluster_ids)}
+    cxg["_cluster_rank"] = cxg["_cluster"].map(rank_map)
+    cxg = cxg.sort_values("_cluster_rank", ascending=True)
+
+    cluster_labels = cxg["_cluster_rank"].values
+    sorted_cell_ids = cxg.index
+    cxg = cxg.drop(columns=["_cluster", "_cluster_rank"])
+
+    return cxg, cluster_labels, sorted_cell_ids
+
+
 def plot_cell_x_gene_clustered(
     cxg,
     clip_range=(0, 50),
     sort_gene=None,
     fig_size=(4, 6),
     k=3,
+    cluster_method="kmeans",
+    cluster_result=None,
     add_cluster_labels=True,
     cbar_label="Transcript count",
     title=None,
@@ -274,7 +404,11 @@ def plot_cell_x_gene_clustered(
     gene_label='gene',
 ):
     """
-    Plot the cell x gene matrix as an image with inverted colormap and K-means clustering.
+    Plot the cell x gene matrix as an image with inverted colormap and clustering.
+
+    Clustering is delegated to :func:`cluster_cells`, which supports three methods:
+    ``'kmeans'``, ``'agglomerative'``, and ``'ward_leaf'``.  You can also pass a
+    pre-computed ``cluster_result`` tuple to skip clustering entirely.
 
     Parameters
     ----------
@@ -287,7 +421,16 @@ def plot_cell_x_gene_clustered(
     fig_size : tuple
         Size of the figure to plot.
     k : int
-        Number of clusters for K-means clustering. Default is 3.
+        Number of clusters. Required for ``'kmeans'`` and ``'agglomerative'``.
+        Ignored for ``'ward_leaf'``. Default is 3.
+    cluster_method : {'kmeans', 'agglomerative', 'ward_leaf'}, optional
+        Clustering algorithm to use (default ``'kmeans'``). See :func:`cluster_cells`
+        for full details of each option.
+    cluster_result : tuple, optional
+        Pre-computed result from :func:`cluster_cells` as
+        ``(sorted_cxg, cluster_labels, sorted_cell_ids)``.  When supplied the
+        function skips clustering and uses this directly.  ``cxg`` must still
+        be passed for gene-column sorting.
     add_cluster_labels : bool
         Whether to add green dashed lines and labels to indicate cluster boundaries.
         Default is True.
@@ -305,9 +448,9 @@ def plot_cell_x_gene_clustered(
     dataset : HCRDataset, optional
         Required if gene_sort='round_channel'. Used to get channel-gene mapping.
     cluster_sort_gene : str, optional
-        After KMeans, order the *clusters themselves* by their mean expression of this gene,
-        ascending (lowest-expressing cluster at the top, highest at the bottom).
-        Default is 'Gad2'. Falls back to total mean expression if the gene is absent.
+        After ``'kmeans'`` or ``'agglomerative'`` clustering, order the clusters by their
+        mean expression of this gene (ascending). Default is ``'Gad2'``. Falls back to
+        total mean expression if the gene is absent. Ignored for ``'ward_leaf'``.
     gene_label : {'gene', 'round_channel_gene'}, optional
         Column from the channel-gene table to use as x-axis tick labels.
         'gene' (default) shows only the gene name; 'round_channel_gene' shows
@@ -317,19 +460,17 @@ def plot_cell_x_gene_clustered(
     -------
     fig : matplotlib.figure.Figure
         The matplotlib figure object.
-    cluster_labels : np.ndarray
-        Array of cluster assignments for each cell.
+    cluster_labels : np.ndarray or None
+        Array of cluster assignments for each cell (None for ``'ward_leaf'`` without
+        ``n_clusters_ward``, or when cells are sorted by a gene).
     sorted_cell_ids : pd.Index
-        Index of cell IDs in the same sorted order as cluster_labels.
+        Index of cell IDs in the same sorted order as the plot rows.
     """
     if not isinstance(cxg, pd.DataFrame):
         raise ValueError("Input cxg must be a pandas DataFrame.")
 
     cxg = cxg.copy()  # avoid modifying the original DataFrame
-    # set color min/max
-    cxg = cxg.fillna(0)  # fill NaN values with 0
-
-    # make int
+    cxg = cxg.fillna(0)
     cxg = cxg.astype(int)
     cxg = cxg.clip(lower=clip_range[0], upper=clip_range[1])
 
@@ -344,57 +485,42 @@ def plot_cell_x_gene_clustered(
     elif gene_sort == 'alphabetical':
         cxg = cxg[sorted(cxg.columns)]
     elif gene_sort in cxg.columns:
-        # gene_sort is a gene name, will be used for cell sorting below
-        pass
+        pass  # gene name — used for row sorting below
     elif gene_sort is not None and gene_sort != 'alphabetical':
         raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
 
     # Build x-axis tick labels (after column order is finalised)
     x_labels = _build_gene_labels(cxg.columns.tolist(), gene_label, dataset)
 
-    # Perform clustering or sorting (for rows/cells)
-    # Use gene_sort if it's a gene name, otherwise use legacy sort_gene, otherwise cluster
+    # Determine row ordering
     cell_sort_gene = gene_sort if gene_sort in cxg.columns else sort_gene
-    
+
     if cell_sort_gene is not None and cell_sort_gene in cxg.columns:
-        # Sort by specified gene
+        # Simple gene-expression sort — no clustering
         cxg = cxg.sort_values(by=cell_sort_gene, ascending=False)
         cluster_labels = None
         sorted_cell_ids = cxg.index
         y_label = f"Cells sorted by {cell_sort_gene}"
+    elif cluster_result is not None:
+        # Use pre-computed clustering result
+        sorted_cxg, cluster_labels, sorted_cell_ids = cluster_result
+        # Reindex columns to match the gene sort applied above
+        cxg = sorted_cxg.reindex(columns=cxg.columns, fill_value=0)
+        sort_label = cluster_sort_gene if cluster_sort_gene else "pre-computed"
+        y_label = f"Cells ({cluster_method} pre-computed)"
     else:
-        # Perform K-means clustering
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-        cluster_labels = kmeans.fit_predict(cxg.values)
-
-        # --- Sort clusters by their mean expression of cluster_sort_gene ---
-        # (lowest mean → top of plot, highest mean → bottom)
-        cxg["_cluster"] = cluster_labels
-        if cluster_sort_gene and cluster_sort_gene in cxg.columns:
-            cluster_means = cxg.groupby("_cluster")[cluster_sort_gene].mean()
+        # Delegate to cluster_cells()
+        cxg, cluster_labels, sorted_cell_ids = cluster_cells(
+            cxg,
+            method=cluster_method,
+            k=k,
+            cluster_sort_gene=cluster_sort_gene,
+        )
+        if cluster_method == "ward_leaf":
+            y_label = "Cells (Ward optimal-leaf order)"
         else:
-            # fall back to total mean expression per cluster
-            cluster_means = cxg.drop(columns=["_cluster"]).assign(_cluster=cluster_labels).groupby("_cluster").mean().mean(axis=1)
-
-        # Map original cluster id → rank (0 = lowest mean, k-1 = highest mean)
-        sorted_cluster_ids = cluster_means.sort_values(ascending=True).index
-        rank_map = {orig: rank for rank, orig in enumerate(sorted_cluster_ids)}
-        cxg["_cluster_rank"] = cxg["_cluster"].map(rank_map)
-
-        # Sort rows by cluster rank only — no within-cluster sorting
-        cxg = cxg.sort_values("_cluster_rank", ascending=True)
-
-        # Expose remapped cluster labels (0 = lowest gene-expressing cluster)
-        cluster_labels = cxg["_cluster_rank"].values
-
-        # Store sorted cell IDs before dropping helper columns
-        sorted_cell_ids = cxg.index
-
-        # Remove helper columns
-        cxg = cxg.drop(columns=["_cluster", "_cluster_rank"])
-
-        sort_label = cluster_sort_gene if cluster_sort_gene and cluster_sort_gene in cxg.columns else "total expr"
-        y_label = f"Cells (clusters sorted by mean {sort_label} ↑)"
+            sort_label = cluster_sort_gene if cluster_sort_gene else "total expr"
+            y_label = f"Cells ({cluster_method}, sorted by mean {sort_label} ↑)"
 
     if ax is None:
         fig, ax = plt.subplots(figsize=fig_size)
@@ -415,16 +541,13 @@ def plot_cell_x_gene_clustered(
     # y-axis label
     ax.set_ylabel(y_label, fontsize=9)
 
-    # Add cluster labels if clustering was performed and requested
+    # Add cluster boundary lines and labels if clustering was performed and requested
     if cluster_labels is not None and add_cluster_labels:
-        # Find cluster boundaries
         cluster_changes = np.where(np.diff(cluster_labels) != 0)[0] + 0.5
 
-        # Add horizontal dashed lines at cluster boundaries
         for boundary in cluster_changes:
             ax.axhline(y=boundary, color="green", linestyle="--", linewidth=2.0, alpha=0.9)
 
-        # Add cluster ID labels (number only, no "C" prefix)
         unique_clusters = np.unique(cluster_labels)
         for cluster_id in unique_clusters:
             cluster_indices = np.where(cluster_labels == cluster_id)[0]
