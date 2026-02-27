@@ -39,6 +39,7 @@ from .cluster_similarity import (
     plot_cluster_similarity,
     plot_similarity_heatmap,
     plot_match_summary,
+    plot_matched_centroid_heatmap,
 )
 
 __all__ = [
@@ -80,4 +81,5 @@ __all__ = [
     "plot_cluster_similarity",
     "plot_similarity_heatmap",
     "plot_match_summary",
+    "plot_matched_centroid_heatmap",
 ]

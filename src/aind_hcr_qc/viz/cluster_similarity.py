@@ -328,6 +328,8 @@ def compute_cluster_similarity(
         "sizes_a": sizes_a,
         "sizes_b": sizes_b,
         "gene_columns": shared_genes,
+        "centroids_a": centroids_a,
+        "centroids_b": centroids_b,
     }
 
 
@@ -481,6 +483,203 @@ def plot_match_summary(
     ax.set_xlabel("Similarity")
     ax.set_title("Optimal Cluster Matches")
     ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def plot_matched_centroid_heatmap(
+    result: dict,
+    label_a: str = "Version A",
+    label_b: str = "Version B",
+    gene_order: Optional[list[str]] = None,
+    cmap: str = "YlOrRd",
+    similarity_threshold: float = 0.8,
+    figsize: tuple[float, float] = (18, 10),
+    vmax: Optional[float] = None,
+) -> plt.Figure:
+    """
+    Matched centroid heatmap with per-pair cluster-size bars and similarity strip.
+
+    Each matched cluster pair occupies two adjacent rows — the top row is
+    dataset A's centroid, the bottom row is dataset B's — separated by a thin
+    white line.  Three panels are arranged side by side:
+
+    * **Left**: gene expression heatmap (genes × matched pairs × 2 sub-rows).
+    * **Centre**: horizontal bar chart of cluster sizes (A and B side by side).
+    * **Right**: coloured similarity strip (green ≥ threshold, red < threshold),
+      with the numeric score annotated.
+
+    Pairs are sorted best-match first (descending similarity).
+
+    Parameters
+    ----------
+    result : dict
+        Output of :func:`compute_cluster_similarity`.  Must contain
+        ``centroids_a``, ``centroids_b``, ``ids_a``, ``ids_b``,
+        ``sizes_a``, ``sizes_b``, ``match_df``, and ``gene_columns``.
+    label_a, label_b : str
+        Human-readable dataset names.
+    gene_order : list of str, optional
+        Explicit gene column order.  Defaults to sorting genes by their mean
+        expression across all centroids (highest on the left).
+    cmap : str
+        Matplotlib colormap for the expression heatmap.
+    similarity_threshold : float
+        Scores at or above this value are coloured green in the similarity strip;
+        below are coloured red.
+    figsize : tuple
+        Overall figure size ``(width, height)``.
+    vmax : float, optional
+        Upper clip value for the expression colour scale.  Defaults to the
+        99th-percentile of all centroid values.
+
+    Returns
+    -------
+    plt.Figure
+    """
+    match_df = result["match_df"].copy().sort_values("similarity", ascending=False).reset_index(drop=True)
+    gene_columns = result["gene_columns"]
+    centroids_a = result["centroids_a"]   # shape (n_a, n_genes)
+    centroids_b = result["centroids_b"]   # shape (n_b, n_genes)
+    ids_a = result["ids_a"]
+    ids_b = result["ids_b"]
+    sizes_a = result["sizes_a"]
+    sizes_b = result["sizes_b"]
+
+    # index lookup: cluster id → row in centroids array
+    id_to_idx_a = {k: i for i, k in enumerate(ids_a)}
+    id_to_idx_b = {k: i for i, k in enumerate(ids_b)}
+    id_to_size_a = {k: s for k, s in zip(ids_a, sizes_a)}
+    id_to_size_b = {k: s for k, s in zip(ids_b, sizes_b)}
+
+    n_pairs = len(match_df)
+    n_rows = n_pairs * 2   # two sub-rows per pair
+
+    # --- build interleaved expression matrix ---
+    # row order: [pair0_A, pair0_B, pair1_A, pair1_B, ...]
+    gene_idx = {g: i for i, g in enumerate(gene_columns)}
+
+    # determine gene order
+    if gene_order is not None:
+        ordered_genes = [g for g in gene_order if g in gene_idx]
+    else:
+        all_centroids = np.vstack([centroids_a, centroids_b])
+        mean_expr = all_centroids.mean(axis=0)
+        ordered_genes = [gene_columns[i] for i in np.argsort(-mean_expr)]
+
+    col_idx = [gene_idx[g] for g in ordered_genes]
+
+    expr_matrix = np.zeros((n_rows, len(ordered_genes)))
+    row_labels = []
+    pair_boundaries = []   # y positions of sub-row dividers between pairs
+
+    for pair_idx, row in match_df.iterrows():
+        ca = centroids_a[id_to_idx_a[row["cluster_a"]]]
+        cb = centroids_b[id_to_idx_b[row["cluster_b"]]]
+        r_a = pair_idx * 2
+        r_b = pair_idx * 2 + 1
+        expr_matrix[r_a] = ca[col_idx]
+        expr_matrix[r_b] = cb[col_idx]
+        row_labels.append(f"{int(row['cluster_a'])}  ({label_a})")
+        row_labels.append(f"{int(row['cluster_b'])}  ({label_b})")
+        if pair_idx < n_pairs - 1:
+            pair_boundaries.append(r_b + 1)   # separator after each B sub-row
+
+    if vmax is None:
+        vmax = float(np.percentile(expr_matrix, 99)) or 1.0
+
+    # --- figure layout ---
+    # widths: [heatmap, size_bars, similarity_strip]
+    fig = plt.figure(figsize=figsize)
+    gs = fig.add_gridspec(
+        1, 3,
+        width_ratios=[12, 3, 1],
+        wspace=0.05,
+    )
+    ax_hm   = fig.add_subplot(gs[0])
+    ax_bar  = fig.add_subplot(gs[1])
+    ax_sim  = fig.add_subplot(gs[2])
+
+    # ── heatmap ──────────────────────────────────────────────────────────────
+    im = ax_hm.imshow(
+        expr_matrix,
+        aspect="auto",
+        cmap=cmap,
+        vmin=0,
+        vmax=vmax,
+        interpolation="nearest",
+    )
+    ax_hm.set_xticks(range(len(ordered_genes)))
+    ax_hm.set_xticklabels(ordered_genes, rotation=45, ha="right", fontsize=8)
+    ax_hm.set_yticks(range(n_rows))
+    ax_hm.set_yticklabels(row_labels, fontsize=8)
+    ax_hm.set_title(f"Matched Cluster Centroids  ({label_a}  vs  {label_b})", fontsize=11)
+
+    # shade alternating pairs and draw pair-boundary lines
+    for pair_idx in range(n_pairs):
+        r_a = pair_idx * 2
+        if pair_idx % 2 == 1:
+            ax_hm.axhspan(r_a - 0.5, r_a + 1.5, color="0.92", zorder=0)
+        if pair_idx < n_pairs - 1:
+            ax_hm.axhline(r_a + 1.5, color="white", linewidth=1.5, zorder=2)
+
+    # colorbar
+    cbar = fig.colorbar(im, ax=ax_hm, shrink=0.4, pad=0.01)
+    cbar.set_label("Expression", fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
+
+    # ── size bar chart ────────────────────────────────────────────────────────
+    bar_height = 0.35
+    y_positions = np.arange(n_pairs)
+    sizes_A = [id_to_size_a[row["cluster_a"]] for _, row in match_df.iterrows()]
+    sizes_B = [id_to_size_b[row["cluster_b"]] for _, row in match_df.iterrows()]
+
+    ax_bar.barh(
+        y_positions + bar_height / 2, sizes_A,
+        height=bar_height, color="#5B9BD5", label=label_a, align="center",
+    )
+    ax_bar.barh(
+        y_positions - bar_height / 2, sizes_B,
+        height=bar_height, color="#ED7D31", label=label_b, align="center",
+    )
+    # align y-axis so each pair band = 2 sub-rows
+    ax_bar.set_ylim(-0.5, n_pairs - 0.5)
+    ax_bar.invert_yaxis()
+    ax_bar.set_yticks([])
+    ax_bar.set_xlabel("Cluster size (cells)", fontsize=8)
+    ax_bar.set_title("Size", fontsize=9)
+    ax_bar.tick_params(axis="x", labelsize=7)
+    ax_bar.legend(fontsize=7, loc="lower right")
+    ax_bar.spines[["top", "right", "left"]].set_visible(False)
+
+    # shade alternating pairs to match heatmap
+    for pair_idx in range(n_pairs):
+        if pair_idx % 2 == 1:
+            ax_bar.axhspan(pair_idx - 0.5, pair_idx + 0.5, color="0.92", zorder=0)
+
+    # ── similarity strip ─────────────────────────────────────────────────────
+    similarities = match_df["similarity"].values.reshape(-1, 1)
+    strip_colors = np.array([
+        [0.18, 0.63, 0.18, 1.0] if s >= similarity_threshold else [0.80, 0.18, 0.18, 1.0]
+        for s in similarities[:, 0]
+    ])
+
+    for i, (sim, color) in enumerate(zip(similarities[:, 0], strip_colors)):
+        ax_sim.barh(i, 1, color=color, height=0.85)
+        ax_sim.text(
+            0.5, i, f"{sim:.2f}",
+            ha="center", va="center",
+            fontsize=7, color="white", fontweight="bold",
+        )
+
+    ax_sim.set_ylim(-0.5, n_pairs - 0.5)
+    ax_sim.invert_yaxis()
+    ax_sim.set_xlim(0, 1)
+    ax_sim.set_xticks([])
+    ax_sim.set_yticks([])
+    ax_sim.set_title("Sim.", fontsize=9)
+    ax_sim.spines[["top", "right", "bottom", "left"]].set_visible(False)
+
     fig.tight_layout()
     return fig
 
