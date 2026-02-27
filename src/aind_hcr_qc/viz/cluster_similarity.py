@@ -857,8 +857,10 @@ def run_pairwise_comparisons(
     for i in range(len(labels)):
         for j in range(i + 1, len(labels)):
             label_a, label_b = labels[i], labels[j]
-            cxg_a, labs_a = mouse_data[label_a]
-            cxg_b, labs_b = mouse_data[label_b]
+            # Accept 2-tuples (cxg, labels) or 3-tuples (cxg, labels, sorted_cell_ids)
+            # — the third element (sorted_cell_ids) is not needed here.
+            cxg_a, labs_a, *_ = mouse_data[label_a]
+            cxg_b, labs_b, *_ = mouse_data[label_b]
 
             print(f"  Running: {label_a}  vs  {label_b}")
             result = compute_cluster_similarity(

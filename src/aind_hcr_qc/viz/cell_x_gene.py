@@ -386,6 +386,7 @@ def cluster_cells(
     return cxg, cluster_labels, sorted_cell_ids
 
 
+@saveable_plot()
 def plot_cell_x_gene_clustered(
     cxg,
     clip_range=(0, 50),
@@ -1630,6 +1631,19 @@ def threshold_genes(
         Columns: ``gene``, ``threshold_log2``, ``threshold_raw``.
     """
     genes = genes if genes is not None else pivot_df.columns.tolist()
+
+    # Validate all requested genes are present before fitting anything
+    missing = [g for g in genes if g not in pivot_df.columns]
+    if missing:
+        available = sorted(pivot_df.columns.tolist())
+        raise KeyError(
+            f"[GMM] The following inhibitory marker gene(s) were requested but are "
+            f"not present in the cell × gene pivot table: {missing}.\n"
+            f"Available genes: {available}\n"
+            f"Check that the correct rounds/channels were loaded and that gene name "
+            f"spelling matches exactly (case-sensitive)."
+        )
+
     rows = []
     for gene in genes:
         result = fit_gmm_threshold(
