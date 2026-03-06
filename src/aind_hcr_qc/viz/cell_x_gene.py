@@ -233,7 +233,11 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
         cxg = cxg.sort_values(by=sort_gene, ascending=False)
 
     # Build x-axis tick labels
-    x_labels = _build_gene_labels(cxg.columns.tolist(), gene_label, dataset)
+    # Auto-upgrade to round_channel_gene when round_channel sort is used
+    effective_gene_label = gene_label
+    if gene_sort == 'round_channel' and gene_label == 'gene':
+        effective_gene_label = 'round_channel_gene'
+    x_labels = _build_gene_labels(cxg.columns.tolist(), effective_gene_label, dataset)
 
     if ax is None:
         fig, ax = plt.subplots(figsize=fig_size)
@@ -254,7 +258,11 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
     # plt.yticks(ticks=range(len(cxg.index)), labels=cxg.index)
     ax.set_xticks(ticks=range(len(cxg.columns)), labels=x_labels, rotation=90)
     ax.set_title(title)
-    # colorbar
+
+    # y-axis ticks: show 0 and total cell count only
+    n_cells = len(cxg)
+    ax.set_yticks([0, n_cells - 1])
+    ax.set_yticklabels([0, n_cells])
 
     return ax
 
@@ -455,7 +463,10 @@ def plot_cell_x_gene_clustered(
     gene_label : {'gene', 'round_channel_gene'}, optional
         Column from the channel-gene table to use as x-axis tick labels.
         'gene' (default) shows only the gene name; 'round_channel_gene' shows
-        e.g. "R2_ch647_Gad2". Requires ``dataset`` when not 'gene'.
+        e.g. "R1-488-GFP". Requires ``dataset`` when not 'gene'.
+        When ``gene_sort='round_channel'`` and this is left as ``'gene'``, it is
+        automatically upgraded to ``'round_channel_gene'`` so labels always reflect
+        the round and channel without needing to pass the parameter explicitly.
 
     Returns
     -------
@@ -491,7 +502,12 @@ def plot_cell_x_gene_clustered(
         raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
 
     # Build x-axis tick labels (after column order is finalised)
-    x_labels = _build_gene_labels(cxg.columns.tolist(), gene_label, dataset)
+    # If round_channel sort was selected and the caller left gene_label at its default,
+    # automatically upgrade to 'round_channel_gene' so each label reads e.g. "R1-488-GFP".
+    effective_gene_label = gene_label
+    if gene_sort == 'round_channel' and gene_label == 'gene':
+        effective_gene_label = 'round_channel_gene'
+    x_labels = _build_gene_labels(cxg.columns.tolist(), effective_gene_label, dataset)
 
     # Determine row ordering
     cell_sort_gene = gene_sort if gene_sort in cxg.columns else sort_gene
@@ -567,6 +583,11 @@ def plot_cell_x_gene_clustered(
 
     if title is not None:
         ax.set_title(title)
+
+    # y-axis ticks: show 0 and total cell count only
+    n_cells = len(cxg)
+    ax.set_yticks([0, n_cells - 1])
+    ax.set_yticklabels([0, n_cells])
 
     return fig, cluster_labels, sorted_cell_ids
 
