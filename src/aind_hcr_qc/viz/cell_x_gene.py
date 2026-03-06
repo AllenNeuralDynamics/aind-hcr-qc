@@ -167,6 +167,42 @@ def _build_gene_labels(gene_columns: list, gene_label: str, dataset) -> list:
     return [gene_to_label.get(g, g) for g in gene_columns]
 
 
+def _resolve_sort_gene(gene: str, columns) -> str | None:
+    """
+    Resolve a gene name to the actual column name in a CXG DataFrame.
+
+    Handles two cases:
+    - Exact match: ``"Gad2"`` when columns contain ``"Gad2"``
+    - Suffix match: ``"Gad2"`` when columns contain ``"R1-488-Gad2"``
+      (i.e. round-channel-gene format like ``"R{n}-{ch}-{gene}"``).
+
+    Parameters
+    ----------
+    gene : str
+        Gene name to look up (bare name, e.g. ``"Gad2"``).
+    columns : sequence of str
+        Column names of the CXG DataFrame.
+
+    Returns
+    -------
+    str or None
+        The matching column name, or ``None`` if no match is found.
+    """
+    if gene is None:
+        return None
+    if gene in columns:
+        return gene
+    # Try suffix match: column ends with "-<gene>" (round-channel-gene format)
+    suffix = f"-{gene}"
+    matches = [c for c in columns if c.endswith(suffix)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        # Multiple matches (e.g. gene appears in several rounds) — return the first
+        return matches[0]
+    return None
+
+
 def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4, 6), ax=None, title=None, 
                            gene_sort='alphabetical', dataset=None, cbar_label="Transcript count",
                            gene_label='gene'):
@@ -220,17 +256,20 @@ def plot_cell_x_gene_simple(cxg, clip_range=(0, 50), sort_gene=None, fig_size=(4
         cxg = cxg[gene_order]
     elif gene_sort == 'alphabetical':
         cxg = cxg[sorted(cxg.columns)]
-    elif gene_sort in cxg.columns:
-        # gene_sort is a gene name, sort cells by it
-        cxg = cxg.sort_values(by=gene_sort, ascending=False)
-    elif gene_sort is not None and gene_sort != 'alphabetical':
-        raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
-    
+    elif gene_sort is not None:
+        # gene_sort may be a bare gene name or round-channel-gene format
+        resolved = _resolve_sort_gene(gene_sort, cxg.columns)
+        if resolved is not None:
+            cxg = cxg.sort_values(by=resolved, ascending=False)
+        else:
+            raise ValueError(f"gene_sort '{gene_sort}' not recognized. Use 'alphabetical', 'round_channel', or a gene name.")
+
     # Legacy support for sort_gene parameter
     if sort_gene is not None:
-        if sort_gene not in cxg.columns:
+        resolved_legacy = _resolve_sort_gene(sort_gene, cxg.columns)
+        if resolved_legacy is None:
             raise ValueError(f"Gene '{sort_gene}' not found in cell x gene matrix columns.")
-        cxg = cxg.sort_values(by=sort_gene, ascending=False)
+        cxg = cxg.sort_values(by=resolved_legacy, ascending=False)
 
     # Build x-axis tick labels
     # Auto-upgrade to round_channel_gene when round_channel sort is used
@@ -372,12 +411,14 @@ def cluster_cells(
     # --- Shared post-processing for kmeans / agglomerative ---
     # Sort clusters by mean expression of cluster_sort_gene (ascending)
     cxg["_cluster"] = raw_labels
-    if cluster_sort_gene and cluster_sort_gene in cxg.columns:
-        cluster_means = cxg.groupby("_cluster")[cluster_sort_gene].mean()
+    resolved_sort_gene = _resolve_sort_gene(cluster_sort_gene, cxg.columns)
+    if resolved_sort_gene is not None:
+        cluster_means = cxg.groupby("_cluster")[resolved_sort_gene].mean()
     else:
         cluster_means = (
             cxg.drop(columns=["_cluster"])
-            .groupby(raw_labels)
+            .assign(_cluster=raw_labels)
+            .groupby("_cluster")
             .mean()
             .mean(axis=1)
         )
@@ -510,9 +551,11 @@ def plot_cell_x_gene_clustered(
     x_labels = _build_gene_labels(cxg.columns.tolist(), effective_gene_label, dataset)
 
     # Determine row ordering
-    cell_sort_gene = gene_sort if gene_sort in cxg.columns else sort_gene
+    # Resolve bare gene names to actual column names (handles round-channel-gene format)
+    raw_cell_sort = gene_sort if gene_sort not in ('round_channel', 'alphabetical', None) else sort_gene
+    cell_sort_gene = _resolve_sort_gene(raw_cell_sort, cxg.columns)
 
-    if cell_sort_gene is not None and cell_sort_gene in cxg.columns:
+    if cell_sort_gene is not None:
         # Simple gene-expression sort — no clustering
         cxg = cxg.sort_values(by=cell_sort_gene, ascending=False)
         cluster_labels = None
