@@ -33,6 +33,44 @@ Quality control analysis for AIND HCR data processing. Provides tools for valida
 Intergration will AIND QC portal will happen when team identifies and evaluates essential plots.
 
 ## Change log
+
+**v0.5.0 (03/18/2026)**
+
+*New module: `viz/cluster_similarity.py`*
++ `compute_cluster_similarity()` — pairwise cluster comparison between rounds using expression centroids and cosine/correlation similarity
++ `match_clusters()` — greedy best-match assignment between two sets of clusters
++ `plot_similarity_heatmap()`, `plot_match_summary()`, `plot_matched_centroid_heatmap()` — visualizations for cluster correspondence
++ `run_pairwise_comparisons()` / `summarise_pairwise_comparisons()` — batch all-vs-all round comparisons with summary plots
++ All cluster-similarity functions exported from `viz.__init__`
+
+*`viz/cell_x_gene.py`*
++ Added full GMM thresholding pipeline for inhibitory marker genes
++ Added `fig_mixed_unmixed_cxg_and_corr()` — side-by-side mixed/unmixed CxG with correlation panel
++ Added `cluster_cells()` — k-means / GMM clustering helper with BIC-based optimal-k selection (guarded against small datasets)
++ `plot_cell_x_gene_simple()` updated: gene-label building refactored into `_build_gene_labels()`, `round_channel_gene` label support, cluster-label overlays
++ All new CxG functions exported from `viz.__init__`
+
+*`viz/spectral_unmixing.py`*
++ Added spot-reassignment analysis: `create_reassignment_matrix()`, `plot_reassignment_matrix()`, `analyze_spot_fate()`, `plot_spot_fate()`, `fig_unmixing_comprehensive()`
++ Added cross-channel nearest-neighbour stats: `cross_channel_nn()`, `cross_channel_nn_gpu()` (optional torch backend), `compute_channel_pair_proximity_stats()`, `compute_all_channel_pair_proximity_stats()`, `compute_all_rounds_proximity_stats()`
++ Added proximity visualization: `plot_proximity_stats_heatmap()`, `plot_proximity_stats_comparison()`, `plot_all_channel_nn_histograms()`
++ Added `create_unique_spot_id()` utility
++ `torch` import made optional inside `cross_channel_nn_gpu` (graceful fallback)
+
+*`viz/segmentation.py`*
++ `plot_centroids()` gains `vmin`/`vmax` parameters for explicit color-scale control
++ Fixed y-axis inversion: no longer inverts for the `XY` plane (only `ZX`/`ZY`)
+
+*`io/zarr_data.py`*
++ Added `extract_volume_around_point()` and `extract_plane_around_point()` for extracting zarr sub-volumes centered on a coordinate
+
+*`utils/utils.py`*
++ Added `combine_pngs_to_pdf()` — natural-sorted PNG-to-PDF combiner for batch figure export
++ Added `_natural_sort_key()` helper
+
+*`scripts/batch_unmixing_analysis.py`* (new)
++ Batch script to run comprehensive unmixing analysis figures across multiple mice and save output as PDFs
+
 **v0.4.0 (10/16/2025)**
 +  new metadata parsing and accessors in HCRRound/HCRDataset
 + improved loading spot functions, cleaned up returned dataframe
