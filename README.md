@@ -34,7 +34,7 @@ Intergration will AIND QC portal will happen when team identifies and evaluates 
 
 ## Change log
 
-**v0.5.0 (03/18/2026)**
+**v0.6.0 (03/18/2026)**
 
 *New module: `viz/cluster_similarity.py`*
 + `compute_cluster_similarity()` — pairwise cluster comparison between rounds using expression centroids and cosine/correlation similarity
