@@ -2,7 +2,17 @@ from .camera_alignment import qc_camera_alignment
 from .cell_x_gene import (
     plot_cell_x_gene_clustered,
     plot_cell_x_gene_simple,
-    fig_mixed_unmixed_cxg_and_corr
+    fig_mixed_unmixed_cxg_and_corr,
+    # thresholding
+    compute_gmm_bic_table,
+    plot_bic_comparison,
+    fit_gmm_threshold,
+    threshold_genes,
+    plot_gmm_threshold_grid,
+    fit_gmm_marker_via_subgenes,
+    plot_gmm_marker_subgene_analysis,
+    run_inhibitory_gmm_thresholding,
+    filter_cells_by_gmm_thresholds,
 )
 from .cells import (
     plot_single_cell_expression_all_rounds,
@@ -24,6 +34,13 @@ from .spectral_unmixing import (
 from .tile_alignment import (
     qc_tile_alignment,
 )
+from .cluster_similarity import (
+    compute_cluster_similarity,
+    plot_cluster_similarity,
+    plot_similarity_heatmap,
+    plot_match_summary,
+    plot_matched_centroid_heatmap,
+)
 
 __all__ = [
     "CHANNEL_COLORS",
@@ -35,6 +52,16 @@ __all__ = [
     "plot_cell_x_gene_simple",
     "plot_cell_x_gene_clustered",
     "fig_mixed_unmixed_cxg_and_corr",
+    # gmm thresholding
+    "compute_gmm_bic_table",
+    "plot_bic_comparison",
+    "fit_gmm_threshold",
+    "threshold_genes",
+    "plot_gmm_threshold_grid",
+    "fit_gmm_marker_via_subgenes",
+    "plot_gmm_marker_subgene_analysis",
+    "run_inhibitory_gmm_thresholding",
+    "filter_cells_by_gmm_thresholds",
     # segmentation
     "qc_segmentation",
     "plot_single_cell_segmentation_overview",
@@ -49,4 +76,10 @@ __all__ = [
     "plot_channel_intensity_histograms_by_round",
     # cells
     "plot_single_cell_expression_all_rounds",
+    # cluster similarity
+    "compute_cluster_similarity",
+    "plot_cluster_similarity",
+    "plot_similarity_heatmap",
+    "plot_match_summary",
+    "plot_matched_centroid_heatmap",
 ]
