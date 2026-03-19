@@ -1378,41 +1378,62 @@ def calculate_cluster_percentages(cluster_labels):
     )
     return cluster_df
 
-
-def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False, output_dir=Path("/root/capsule/scratch/")):
+@saveable_plot()
+def plot_cluster_centroids(cell_info_clusters, cluster_n, cluster_key="cluster_label", orientation="XY", fig_size=(4, 4), save=False, output_dir=Path("/root/capsule/scratch/")):
     """
     Plot the centroids of a specific cluster.
 
     Parameters:
     cluster_n (int): The cluster number to plot.
+    orientation (str): One of 'XY', 'ZX', or 'ZY'.
     """
+    _ORIENTATION_COLS = {
+        "XY": ("x_centroid", "y_centroid"),
+        "ZX": ("x_centroid", "z_centroid"),
+        "ZY": ("y_centroid", "z_centroid"),
+    }
+    _ORIENTATION_LABELS = {
+        "XY": ("X (pixels)", "Y (pixels)"),
+        "ZX": ("X (pixels)", "Z (pixels)"),
+        "ZY": ("Y (pixels)", "Z (pixels)"),
+    }
+    orientation = orientation.upper()
+    if orientation not in _ORIENTATION_COLS:
+        raise ValueError(f"orientation must be one of {list(_ORIENTATION_COLS.keys())}, got '{orientation}'")
+
+    x_col, y_col = _ORIENTATION_COLS[orientation]
+    x_label, y_label = _ORIENTATION_LABELS[orientation]
+
     # Filter the cell_info_clusters DataFrame for the specified cluster
-    plot_cluster_df = cell_info_clusters[cell_info_clusters["cluster_label"] == cluster_n]
+    plot_cluster_df = cell_info_clusters[cell_info_clusters[cluster_key] == cluster_n].copy()
 
     # Set the cluster label to 1 for plotting purposes
-    plot_cluster_df["cluster_label"] = 1
+    plot_cluster_df[cluster_key] = 1
 
-    # Get the maximum x and y coordinates for setting limits
-    max_x = cell_info_clusters["x_centroid"].max()
-    max_y = cell_info_clusters["y_centroid"].max()
+    # Get the axis limits from the correct columns for this orientation
+    max_x = cell_info_clusters[x_col].max()
+    max_y = cell_info_clusters[y_col].max()
 
     # Plot the centroids with histogram
     fig = plot_centroids_with_hist(
         plot_cluster_df,
-        orientation="XY",
-        color_col="cluster_label",
+        orientation=orientation,
+        color_col=cluster_key,
         cmap="Greys_r",
         xlims=(0, max_x),
         ylims=(0, max_y),
         show_colorbar=False,
-        fig_size=(4, 4),
+        fig_size=fig_size,
         save=save,
         output_dir=output_dir,
-        title_str=f"Cluster {cluster_n}",
+        #title_str=f"{orientation} plane — {cluster_n}",
     )
 
-    # if not save:
-    #     #plt.show()
+    # Apply orientation-matched axis labels
+    ax = fig.axes[0]
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(f"{orientation} plane — {cluster_n}")
 
     return fig
 
