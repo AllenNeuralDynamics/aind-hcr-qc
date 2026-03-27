@@ -64,7 +64,7 @@ def plot_intensity_violins(
     order: str = "round_chan",
     chan_col: str = "unmixed_chan",
     intensity_threshold: float | None = 20.0,
-    n_sample: int = 5_000,
+    n_sample: int = 25_000,
     ax=None,
     figsize=None,
 ):
@@ -87,7 +87,7 @@ def plot_intensity_violins(
         Passed to add_unmixed_channel_intensity; drops spots at or below this
         value. Default 20 removes the sub-threshold floor pile-up.
     n_sample : int
-        Max spots per group passed to the KDE. Default 10000 is plenty for
+        Max spots per group passed to the KDE. Default 25000 is plenty for
         an accurate violin shape and keeps rendering fast.
     ax : matplotlib.axes.Axes, optional
     figsize : tuple, optional
@@ -100,12 +100,16 @@ def plot_intensity_violins(
     keep = [chan_col, "round", x_col] + intensity_cols
     df = add_unmixed_channel_intensity(spots_df[keep], chan_col=chan_col, intensity_threshold=intensity_threshold)
 
-    # Subsample per group — KDE only needs thousands of points, not millions
-    df = (
-        df.groupby(group_col, sort=False)
-        .apply(lambda g: g.sample(min(len(g), n_sample), random_state=0))
-        .reset_index(drop=True)
-    )
+    # Subsample per group — KDE only needs thousands of points, not millions.
+    # Avoid groupby.apply: pandas 3.0 excludes the groupby key column from the
+    # group DataFrames passed to apply, which loses group_col from the result.
+    rng = np.random.default_rng(0)
+    sampled_idx = np.concatenate([
+        rng.choice(idx, min(len(idx), n_sample), replace=False)
+        for idx in df.groupby(group_col, sort=False).groups.values()
+    ])
+    df = df.loc[sampled_idx].reset_index(drop=True)
+    print(df)
 
     if order == "round_chan":
         x_col = "rd_ch_unmixed_gene"
