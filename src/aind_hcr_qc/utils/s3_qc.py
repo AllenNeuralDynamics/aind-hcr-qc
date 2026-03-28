@@ -211,6 +211,82 @@ def download_plot(
     return dest
 
 
+def list_plots(
+    bucket: str = QC_S3_BUCKET,
+    prefix: str = QC_S3_PREFIX,
+) -> list[dict]:
+    """List all QC plots available under *prefix* in *bucket*.
+
+    Uses S3 ``list_objects_v2`` with a ``/``-based delimiter to enumerate
+    mouse folders, then lists PNG keys within each.  Only keys that end in
+    ``.png`` (i.e. the plot itself, not sidecars) are returned.
+
+    Parameters
+    ----------
+    bucket:
+        S3 bucket name.
+    prefix:
+        S3 key prefix to search under (no trailing slash).
+
+    Returns
+    -------
+    list[dict]
+        One entry per plot, e.g.::
+
+            [
+                {
+                    "mouse_id": "782149",
+                    "plot_type": "intensity_violins_round_chan",
+                    "s3_key": "ctl/hcr/qc/782149/intensity_violins_round_chan.png",
+                },
+                ...
+            ]
+
+        Sorted by ``(mouse_id, plot_type)``.
+    """
+    s3 = boto3.client("s3")
+    results = []
+
+    # Paginate over mouse-level "folders" (common prefixes)
+    mouse_paginator = s3.get_paginator("list_objects_v2")
+    mouse_pages = mouse_paginator.paginate(
+        Bucket=bucket,
+        Prefix=prefix + "/",
+        Delimiter="/",
+    )
+
+    for page in mouse_pages:
+        for cp in page.get("CommonPrefixes", []):
+            mouse_prefix = cp["Prefix"]  # e.g. "ctl/hcr/qc/782149/"
+            # Derive mouse_id from the prefix segment
+            mouse_id = mouse_prefix.rstrip("/").split("/")[-1]
+
+            # Skip the dedicated test folder
+            if mouse_id.startswith("_"):
+                continue
+
+            # List PNGs within this mouse folder
+            plot_pages = mouse_paginator.paginate(
+                Bucket=bucket,
+                Prefix=mouse_prefix,
+            )
+            for ppage in plot_pages:
+                for obj in ppage.get("Contents", []):
+                    key = obj["Key"]
+                    if not key.endswith(".png"):
+                        continue
+                    plot_type = key.split("/")[-1][:-4]  # strip .png
+                    results.append(
+                        {
+                            "mouse_id": mouse_id,
+                            "plot_type": plot_type,
+                            "s3_key": key,
+                        }
+                    )
+
+    return sorted(results, key=lambda r: (r["mouse_id"], r["plot_type"]))
+
+
 def load_plot_metadata(
     bucket: str,
     mouse_id: str,
