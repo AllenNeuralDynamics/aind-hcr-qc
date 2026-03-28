@@ -26,7 +26,8 @@ dependencies = [
     'aind-ng-link',
     'aind-hcr-data-loader',
     'xmltodict', # needed for parsers, which is hacked from aind-ng-link
-    'aind-ng-link'
+    'aind-ng-link',
+    'boto3',
 ]
 
 [project.optional-dependencies]
