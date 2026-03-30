@@ -89,6 +89,62 @@ def check_plot_exists(
         raise
 
 
+def delete_plot(
+    bucket: str,
+    mouse_id: str,
+    plot_type: str,
+    prefix: str = QC_S3_PREFIX,
+    dry_run: bool = True,
+) -> list[str]:
+    """Delete a plot's PNG and JSON sidecar from S3.
+
+    Defaults to ``dry_run=True`` — pass ``dry_run=False`` to actually delete.
+    Returns a list of the keys that were (or would be) deleted.
+
+    Parameters
+    ----------
+    bucket:
+        S3 bucket name.
+    mouse_id:
+        Subject identifier.
+    plot_type:
+        Short plot identifier, e.g. ``"spots_intensity_violins_round_chan"``.
+    prefix:
+        S3 key prefix (no trailing slash).
+    dry_run:
+        When ``True`` (default), print what would be deleted without touching S3.
+    """
+    s3 = boto3.client("s3")
+    keys = [
+        _get_s3_key(mouse_id, plot_type, "png", prefix),
+        _get_s3_key(mouse_id, plot_type, "json", prefix),
+    ]
+
+    existing = []
+    for key in keys:
+        try:
+            s3.head_object(Bucket=bucket, Key=key)
+            existing.append(key)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                print(f"  [not found] s3://{bucket}/{key}")
+            else:
+                raise
+
+    if not existing:
+        print(f"Nothing to delete for mouse={mouse_id} plot_type={plot_type}.")
+        return []
+
+    for key in existing:
+        if dry_run:
+            print(f"  [dry-run] would delete s3://{bucket}/{key}")
+        else:
+            s3.delete_object(Bucket=bucket, Key=key)
+            print(f"  [deleted] s3://{bucket}/{key}")
+
+    return existing
+
+
 def upload_plot(
     fig: plt.Figure | None,
     bucket: str,
