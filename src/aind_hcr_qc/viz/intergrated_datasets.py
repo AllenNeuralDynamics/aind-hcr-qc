@@ -158,3 +158,72 @@ def plot_intensity_violins(
     ax.tick_params(axis="x", rotation=90)
 
     return ax
+
+
+def plot_gene_spot_count_pairplot(
+    cxg_wide: pd.DataFrame,
+    genes_to_plot: list[str] | None = None,
+    title_prefix: str = "",
+    n_sample: int = 10_000,
+    clip_pct: float = 99.9999,
+) -> plt.Figure:
+    """
+    Pairwise spot-count scatter plot across genes, one point per cell.
+
+    Parameters
+    ----------
+    cxg_wide : pd.DataFrame
+        Wide-format aggregated CXG from ``pw_dataset.load_aggregated_cxg()``.
+        Columns are ``{round}-{channel}-{gene}`` labels; index is ``cell_id``.
+    genes_to_plot : list[str] or None
+        Subset of gene names to include. ``None`` uses all genes present.
+    title_prefix : str
+        Prepended to the figure suptitle (e.g. ``"755252 - "``).
+    n_sample : int
+        Max number of cells to plot. Cells are sampled randomly when exceeded.
+    clip_pct : float
+        Percentile at which to clip outlier counts per gene before plotting.
+
+    Returns
+    -------
+    plt.Figure
+    """
+    # Aggregate round×channel columns down to per-gene totals.
+    # Column names are "Rn-chan-Gene"; gene is everything after the last "-".
+    gene_map: dict[str, list[str]] = {}
+    for col in cxg_wide.columns:
+        gene = col.split("-")[-1]
+        gene_map.setdefault(gene, []).append(col)
+
+    gene_df = pd.DataFrame(
+        {gene: cxg_wide[cols].sum(axis=1) for gene, cols in gene_map.items()},
+        index=cxg_wide.index,
+    )
+
+    if genes_to_plot is not None:
+        present = [g for g in genes_to_plot if g in gene_df.columns]
+        missing = [g for g in genes_to_plot if g not in gene_df.columns]
+        if missing:
+            print(f"  [pairplot] genes not found in CXG, skipping: {missing}")
+        gene_df = gene_df[present]
+
+    # Clip outliers then subsample
+    gene_df = gene_df.clip(upper=gene_df.quantile(clip_pct / 100), axis=1)
+    if len(gene_df) > n_sample:
+        gene_df = gene_df.sample(n_sample, random_state=42)
+
+    n_genes = gene_df.shape[1]
+    label = f"{n_genes} genes" if genes_to_plot is None else f"{n_genes} selected genes"
+
+    g = sns.pairplot(
+        gene_df,
+        corner=True,
+        plot_kws={"s": 10, "alpha": 0.4, "edgecolor": "none", "rasterized": True},
+        diag_kind="kde",
+        diag_kws={"fill": True},
+    )
+    title = f"{title_prefix}Pairwise Gene Spot Counts per Cell — {label}"
+    g.figure.suptitle(title.strip(), y=1.02, fontsize=14)
+    plt.tight_layout()
+
+    return g.figure
