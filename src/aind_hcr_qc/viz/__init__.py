@@ -13,6 +13,7 @@ from .cell_x_gene import (
     plot_gmm_marker_subgene_analysis,
     run_inhibitory_gmm_thresholding,
     filter_cells_by_gmm_thresholds,
+    plot_cluster_centroids
 )
 from .cells import (
     plot_single_cell_expression_all_rounds,
@@ -52,6 +53,7 @@ __all__ = [
     "plot_cell_x_gene_simple",
     "plot_cell_x_gene_clustered",
     "fig_mixed_unmixed_cxg_and_corr",
+    "plot_cluster_centroids"
     # gmm thresholding
     "compute_gmm_bic_table",
     "plot_bic_comparison",

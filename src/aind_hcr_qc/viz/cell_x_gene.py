@@ -1378,41 +1378,217 @@ def calculate_cluster_percentages(cluster_labels):
     )
     return cluster_df
 
-
-def plot_cluster_centroids(cell_info_clusters, cluster_n, save=False, output_dir=Path("/root/capsule/scratch/")):
+@saveable_plot()
+def plot_cluster_centroids(cell_info_clusters, cluster_n, cluster_key="cluster_label", orientation="XY", fig_size=(4, 4), save=False, invert_z=False, output_dir=Path("/root/capsule/scratch/")):
     """
     Plot the centroids of a specific cluster.
 
     Parameters:
     cluster_n (int): The cluster number to plot.
+    orientation (str): One of 'XY', 'ZX', or 'ZY'.
     """
+    _ORIENTATION_COLS = {
+        "XY": ("x_centroid", "y_centroid"),
+        "ZX": ("x_centroid", "z_centroid"),
+        "ZY": ("y_centroid", "z_centroid"),
+    }
+    _ORIENTATION_LABELS = {
+        "XY": ("X (pixels)", "Y (pixels)"),
+        "ZX": ("X (pixels)", "Z (pixels)"),
+        "ZY": ("Y (pixels)", "Z (pixels)"),
+    }
+    orientation = orientation.upper()
+    if orientation not in _ORIENTATION_COLS:
+        raise ValueError(f"orientation must be one of {list(_ORIENTATION_COLS.keys())}, got '{orientation}'")
+
+    x_col, y_col = _ORIENTATION_COLS[orientation]
+    x_label, y_label = _ORIENTATION_LABELS[orientation]
+
     # Filter the cell_info_clusters DataFrame for the specified cluster
-    plot_cluster_df = cell_info_clusters[cell_info_clusters["cluster_label"] == cluster_n]
+    plot_cluster_df = cell_info_clusters[cell_info_clusters[cluster_key] == cluster_n].copy()
 
     # Set the cluster label to 1 for plotting purposes
-    plot_cluster_df["cluster_label"] = 1
+    plot_cluster_df[cluster_key] = 1
 
-    # Get the maximum x and y coordinates for setting limits
-    max_x = cell_info_clusters["x_centroid"].max()
-    max_y = cell_info_clusters["y_centroid"].max()
+    # Get the axis limits from the correct columns for this orientation
+    max_x = cell_info_clusters[x_col].max()
+    max_y = cell_info_clusters[y_col].max()
 
     # Plot the centroids with histogram
     fig = plot_centroids_with_hist(
         plot_cluster_df,
-        orientation="XY",
-        color_col="cluster_label",
+        orientation=orientation,
+        color_col=cluster_key,
         cmap="Greys_r",
         xlims=(0, max_x),
         ylims=(0, max_y),
         show_colorbar=False,
-        fig_size=(4, 4),
+        fig_size=fig_size,
         save=save,
         output_dir=output_dir,
-        title_str=f"Cluster {cluster_n}",
+        #title_str=f"{orientation} plane — {cluster_n}",
     )
 
-    # if not save:
-    #     #plt.show()
+    # Apply orientation-matched axis labels; invert Y when Z is on the Y-axis
+    ax = fig.axes[0]
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(f"{orientation} plane — {cluster_n}")
+    if invert_z and orientation in ("ZX", "ZY"):
+        ax.invert_yaxis()
+
+    return fig
+
+
+def _scatter_params_for_n(n, ref_n=10_000, base_s=4.0, base_alpha=0.4):
+    """
+    Return (s, alpha) for a scatter plot that adapts to the number of points.
+
+    Scaling is log-linear around a reference density ``ref_n``:
+    - fewer cells  → larger markers, higher alpha  (sparse, need to be visible)
+    - more cells   → smaller markers, lower alpha  (dense, avoid overplotting)
+
+    Parameters
+    ----------
+    n       : int   — actual number of cells to plot
+    ref_n   : int   — reference cell count where base_s / base_alpha are used
+    base_s  : float — marker size at ref_n
+    base_alpha : float — alpha at ref_n
+    """
+    if n <= 0:
+        return base_s, base_alpha
+    factor = np.log10(max(ref_n, 2)) / np.log10(max(n, 2))
+    s     = float(np.clip(base_s     * factor, 0.3, 25.0))
+    alpha = float(np.clip(base_alpha * factor, 0.05, 0.9))
+    return s, alpha
+
+@saveable_plot()
+def plot_all_subclass_centroids(
+    cells,
+    cluster_key="subclass_name",
+    orientation="ZX", # options "ZX", "ZY", "XY"
+    n_cols=6,
+    panel_size=3,
+    invert_z=False,
+):
+    """
+    Plot centroid scatter panels for every subclass, producing one figure per
+    orientation, ordered by descending cell count.
+
+    Parameters
+    ----------
+    cells : pd.DataFrame
+        Merged cell-info + taxonomy DataFrame with centroid columns and ``cluster_key``.
+    cluster_key : str
+        Column that holds the subclass / cluster label.
+    orientation: str
+        Orientation to plot (default "ZX").
+    n_cols : int
+        Number of columns in each grid (default 6).
+    panel_size : float
+        Width and height in inches of each individual panel.
+    save : bool
+        Whether to save each figure to disk.
+    output_dir : Path
+        Directory to save figures.
+    filename_prefix : str
+        Prefix for saved filenames; orientation is appended, e.g.
+        ``all_subclass_centroids_ZX.png``.
+
+    Returns
+    -------
+    figs : dict[str, matplotlib.figure.Figure]
+        Mapping of orientation string → figure, e.g. ``{"ZX": fig_zx, "ZY": fig_zy}``.
+    """
+    _ORIENTATION_COLS = {
+        "XY": ("x_centroid", "y_centroid"),
+        "ZX": ("x_centroid", "z_centroid"),
+        "ZY": ("y_centroid", "z_centroid"),
+    }
+    _ORIENTATION_LABELS = {
+        "XY": ("X (pixels)", "Y (pixels)"),
+        "ZX": ("X (pixels)", "Z (pixels)"),
+        "ZY": ("Y (pixels)", "Z (pixels)"),
+    }
+
+    # ── sort subclasses by n cells descending ──────────────────────────────
+    counts = cells[cluster_key].value_counts()   # already sorted desc
+    subclasses = counts.index.tolist()
+    n_subclasses = len(subclasses)
+    n_rows = int(np.ceil(n_subclasses / n_cols))
+    fig_w = panel_size * n_cols
+    fig_h = panel_size * n_rows
+
+    figs = {}
+
+    x_col, y_col = _ORIENTATION_COLS[orientation]
+    x_label, y_label = _ORIENTATION_LABELS[orientation]
+    xlims = (0, cells[x_col].max())
+    ylims = (0, cells[y_col].max())
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(fig_w, fig_h),
+        squeeze=False,
+    )
+    axes_flat = axes.flatten()
+
+    for panel_idx, subclass in enumerate(subclasses):
+        row, col = divmod(panel_idx, n_cols)
+        sub_df = cells[cells[cluster_key] == subclass]
+        n_cells = len(sub_df)
+        ax = axes_flat[panel_idx]
+        s, alpha = _scatter_params_for_n(n_cells)
+
+        ax.scatter(
+            sub_df[x_col],
+            sub_df[y_col],
+            s=s,
+            alpha=alpha,
+            color="steelblue",
+            linewidths=0,
+            rasterized=True,
+        )
+        ax.set_xlim(*xlims)
+        ax.set_ylim(*ylims)
+        if invert_z and orientation in ("ZX", "ZY"):
+            ax.invert_yaxis()
+
+        # title only — no per-panel axis labels or ticks
+        ax.set_title(f"{subclass}  (n={n_cells:,})", fontsize=9, pad=3)
+        ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+
+        # show spines only on the outer edges of the grid
+        is_left   = (col == 0)
+        last_data_row = (panel_idx // n_cols)  # row of this panel
+        # bottom-edge panel: last row, OR last panel in a partial final row
+        is_bottom = (row == n_rows - 1) or (
+            panel_idx == n_subclasses - 1 and row < n_rows - 1
+        )
+        ax.spines["left"].set_visible(is_left)
+        ax.spines["bottom"].set_visible(is_bottom)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        # single shared axis label per figure edge
+        if is_left:
+            ax.set_ylabel(y_label, fontsize=10)
+            ax.tick_params(left=True, labelleft=True, labelsize=9)
+        if is_bottom:
+            ax.set_xlabel(x_label, fontsize=10)
+            ax.tick_params(bottom=True, labelbottom=True, labelsize=9)
+
+    # hide any unused trailing panels
+    for idx in range(n_subclasses, len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+
+    fig.suptitle(
+        f"{cluster_key} centroids — {orientation} plane  ({n_subclasses} clusters, ordered by n cells)",
+        fontsize=14,
+        #y=1.002,
+    )
+    fig.subplots_adjust(hspace=0.25, wspace=0.02)
+    fig.tight_layout(rect=[0, 0, 1, 0.99])
 
     return fig
 
