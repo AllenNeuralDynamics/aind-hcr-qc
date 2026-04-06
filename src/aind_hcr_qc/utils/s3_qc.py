@@ -51,6 +51,36 @@ def _get_s3_key(
     return f"{prefix}/{mouse_id}/{plot_type}.{ext}"
 
 
+def _get_round_s3_key(
+    mouse_id: str,
+    asset_name: str,
+    plot_type: str,
+    ext: str,
+    prefix: str = QC_S3_PREFIX,
+) -> str:
+    """Return the canonical S3 key for a round-level plot artifact.
+
+    S3 key structure::
+
+        {prefix}/{mouse_id}/{asset_name}/{plot_type}.{ext}
+
+    Parameters
+    ----------
+    mouse_id:
+        Subject identifier.
+    asset_name:
+        Full asset folder name (processed or raw), e.g.
+        ``"HCR_755252_2025-07-10_13-00-00_processed_2025-07-21_17-35-04"``.
+    plot_type:
+        Short plot identifier, e.g. ``"tile_overview_ch405"``.
+    ext:
+        File extension without the leading dot, e.g. ``"png"`` or ``"json"``.
+    prefix:
+        S3 key prefix (no trailing slash).
+    """
+    return f"{prefix}/{mouse_id}/{asset_name}/{plot_type}.{ext}"
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -87,6 +117,125 @@ def check_plot_exists(
         if error_code in ("404", "NoSuchKey"):
             return False
         raise
+
+
+def check_round_plot_exists(
+    bucket: str,
+    mouse_id: str,
+    asset_name: str,
+    plot_type: str,
+    prefix: str = QC_S3_PREFIX,
+) -> bool:
+    """Return ``True`` if the PNG for this round-level plot already exists on S3.
+
+    Uses a lightweight ``HEAD`` request — no data is downloaded.
+
+    Parameters
+    ----------
+    bucket:
+        S3 bucket name.
+    mouse_id:
+        Subject identifier.
+    asset_name:
+        Full asset folder name (processed or raw).
+    plot_type:
+        Short plot identifier, e.g. ``"tile_overview_ch405"``.
+    prefix:
+        S3 key prefix (no trailing slash).
+    """
+    s3 = boto3.client("s3")
+    key = _get_round_s3_key(mouse_id, asset_name, plot_type, "png", prefix)
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as exc:
+        error_code = exc.response["Error"]["Code"]
+        if error_code in ("404", "NoSuchKey"):
+            return False
+        raise
+
+
+def upload_round_plot(
+    fig: plt.Figure | None,
+    bucket: str,
+    mouse_id: str,
+    asset_name: str,
+    plot_type: str,
+    metadata: dict[str, Any] | None = None,
+    dpi: int = 300,
+    prefix: str = QC_S3_PREFIX,
+) -> str:
+    """Upload a round-level matplotlib figure to S3 with a JSON sidecar.
+
+    The PNG and its sidecar are stored under::
+
+        {prefix}/{mouse_id}/{asset_name}/{plot_type}.png
+        {prefix}/{mouse_id}/{asset_name}/{plot_type}.json
+
+    Parameters
+    ----------
+    fig:
+        Matplotlib figure to save.  Pass ``None`` to use ``plt.gcf()``.
+    bucket:
+        S3 bucket name.
+    mouse_id:
+        Subject identifier.
+    asset_name:
+        Full asset folder name (processed or raw), e.g.
+        ``"HCR_755252_2025-07-10_13-00-00_processed_2025-07-21_17-35-04"``.
+    plot_type:
+        Short plot identifier, e.g. ``"tile_overview_ch405"``.
+    metadata:
+        Extra fields merged into the sidecar JSON, e.g.
+        ``{"source_assets": {"processed": "...", "raw": "..."}}``.
+    dpi:
+        Resolution for the PNG.
+    prefix:
+        S3 key prefix (no trailing slash).
+
+    Returns
+    -------
+    str
+        Full ``s3://bucket/key`` URI of the uploaded PNG.
+    """
+    if fig is None:
+        fig = plt.gcf()
+
+    s3 = boto3.client("s3")
+    png_key = _get_round_s3_key(mouse_id, asset_name, plot_type, "png", prefix)
+    json_key = _get_round_s3_key(mouse_id, asset_name, plot_type, "json", prefix)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    buf.seek(0)
+    s3.put_object(
+        Bucket=bucket,
+        Key=png_key,
+        Body=buf.getvalue(),
+        ContentType="image/png",
+    )
+
+    sidecar: dict[str, Any] = {
+        "created_at": datetime.now(tz=timezone.utc).isoformat(),
+        "mouse_id": mouse_id,
+        "asset_name": asset_name,
+        "plot_type": plot_type,
+        "s3_key": f"s3://{bucket}/{png_key}",
+        "aind_hcr_qc_version": aind_hcr_qc.__version__,
+    }
+    if metadata:
+        sidecar.update(metadata)
+
+    s3.put_object(
+        Bucket=bucket,
+        Key=json_key,
+        Body=json.dumps(sidecar, indent=2).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+    s3_uri = f"s3://{bucket}/{png_key}"
+    print(f"Uploaded round QC plot → {s3_uri}")
+    return s3_uri
 
 
 def delete_plot(
