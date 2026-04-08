@@ -322,36 +322,38 @@ def plot_all_channels_cell(
         channel_to_gene = {}
 
     # Load cell info and segmentation data
-
-    print("\nLoading cell info and segmentation data...")
+    if verbose:
+        print("\nLoading cell info and segmentation data...")
     # cell_info_df = dataset.get_cell_info(source="segmentation")
-    cell_info_df = dataset.rounds[round_key].get_cell_info(source="mixed_cxg")
-    print(cell_info_df.describe())
+    cell_info_df = dataset.rounds[round_key].get_cell_info(source="mixed_cxg", verbose=verbose)
     cell_info_array = cell_info_df[["z_centroid", "y_centroid", "x_centroid", "cell_id"]].to_numpy()
     segmentation_zarr = dataset.load_segmentation_mask(round_key, pyramid_level)
 
     # Get reference channel for segmentation overlay (usually 405)
     ref_channel = "405" if "405" in channels else channels_sorted[0]
-    print(f"Using reference channel {ref_channel} for segmentation overlay")
+    if verbose:
+        print(f"Using reference channel {ref_channel} for segmentation overlay")
 
     # Extract cell volume using reference channel
-    print(f"Extracting cell volume for cell {cell_id}...")
+    if verbose:
+        print(f"Extracting cell volume for cell {cell_id}...")
     ref_zarr = dataset.load_zarr_channel(round_key, ref_channel, data_type="fused", pyramid_level=pyramid_level)
-    print(f"Reference channel shape: {ref_zarr.shape}")
+    if verbose:
+        print(f"Reference channel shape: {ref_zarr.shape}")
 
     seg_crop, img_crop, masks_only, cell_mask_only, origin, z_planes, x_planes = zarr_data.extract_cell_volume(
-        segmentation_zarr, ref_zarr, cell_info_array, cell_id, num_planes=num_planes, plot_buffer=plot_buffer
+        segmentation_zarr, ref_zarr, cell_info_array, cell_id, num_planes=num_planes, plot_buffer=plot_buffer,
+        verbose=verbose,
     )
 
     cell_centroid = cell_info_array[cell_info_array[:, -1] == cell_id, :-1][0]
-    print(f"Cell centroid (z, y, x): {cell_centroid}")
-
-    print(f"Cell crop shape: {seg_crop.shape}")
-    print(f"Origin: {origin}")
-    print(f"Z-planes: {z_planes}")
+    if verbose:
+        print(f"Cell centroid (z, y, x): {cell_centroid}")
+        print(f"Cell crop shape: {seg_crop.shape}")
+        print(f"Origin: {origin}")
+        print(f"Z-planes: {z_planes}")
 
     # Load all channel data
-    print("\nLoading channel data...")
     channel_arrays = {}
     for chan in channels_sorted:
         try:
@@ -361,12 +363,12 @@ def plot_all_channels_cell(
             z1, y1, x1 = z0 + seg_crop.shape[0], y0 + seg_crop.shape[1], x0 + seg_crop.shape[2]
             chan_crop = np.asarray(chan_zarr[0, 0, z0:z1, y0:y1, x0:x1])
             channel_arrays[chan] = chan_crop
-            print(f"  Channel {chan}: loaded, shape {chan_crop.shape}")
         except Exception as e:
             print(f"  Channel {chan}: failed to load - {e}")
             continue
     if verbose:
-        print(f"Successfully loaded {len(channel_arrays)} channels")
+        crop_shape = next(iter(channel_arrays.values())).shape if channel_arrays else None
+        print(f"Loaded {len(channel_arrays)} channels {list(channel_arrays.keys())}, crop shape: {crop_shape}")
 
     if linear_unmix_matrix is not None:
         chan_names = list(channel_arrays.keys())
@@ -376,9 +378,11 @@ def plot_all_channels_cell(
             idx_405 = chan_names.index("405")
             chan_names.pop(idx_405)
             img_arrays.pop(idx_405)
-            print("Removing channel 405 for linear unmixing")
+            if verbose:
+                print("Removing channel 405 for linear unmixing")
         img_stack = np.stack(img_arrays, axis=-1)  # shape (Y, X, C)
-        print(f"Applying linear unmixing with matrix shape {linear_unmix_matrix.shape}...")
+        if verbose:
+            print(f"Applying linear unmixing with matrix shape {linear_unmix_matrix.shape}...")
         unmixed_stack = linear_unmix(
             img_stack,
             linear_unmix_matrix,
@@ -392,8 +396,10 @@ def plot_all_channels_cell(
 
         for i, chan in enumerate(chan_names):
             channel_arrays[chan] = unmixed_stack[..., i]
-            print(f"  Channel {chan}: unmixed")
-        print("Linear unmixing completed.")
+            if verbose:
+                print(f"  Channel {chan}: unmixed")
+        if verbose:
+            print("Linear unmixing completed.")
     # -------------------------------------------------------------------------------------------------
 
 
@@ -428,9 +434,11 @@ def plot_all_channels_cell(
 
     # Select middle z-plane for display
     middle_z = z_planes[len(z_planes) // 2]
-    print(f"Plotting middle z-plane: {middle_z} (global z: {origin[0] + middle_z})")
+    if verbose:
+        print(f"Plotting z-plane {middle_z} (global z: {origin[0] + middle_z})")
 
     # Plot each channel
+    lut_summary = []
     for i, chan in enumerate(channel_arrays.keys()):
         ax = axes[i]
 
@@ -453,7 +461,7 @@ def plot_all_channels_cell(
         else:
             vmin, vmax = chan_data.min(), chan_data.max()
 
-        print(f"  Channel {chan}: vmin={vmin:.1f}, vmax={vmax:.1f}")
+        lut_summary.append(f"Ch{chan}=[{vmin:.0f}-{vmax:.0f}]")
 
         # Get the middle z-plane
         img_slice = chan_data[middle_z, :, :]
@@ -471,8 +479,6 @@ def plot_all_channels_cell(
 
             # Crop the image and masks
             img_slice = img_slice[y_start:y_end, x_start:x_end]
-
-            print(f"  Channel {chan}: trimmed from {h}x{w} to {min_dim}x{min_dim}")
 
         # Plot the image
         ax.imshow(img_slice, cmap="gray", vmin=vmin, vmax=vmax, aspect="equal")
@@ -503,6 +509,9 @@ def plot_all_channels_cell(
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.tick_params(labelsize=8)
+
+    if verbose:
+        print("LUTs: " + "  ".join(lut_summary))
 
     # Adjust layout only if we created our own figure (not using a subfigure)
     # Check if we're working with a subfigure by looking at the type

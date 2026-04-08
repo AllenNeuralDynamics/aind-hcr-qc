@@ -56,6 +56,7 @@ def extract_cell_volume(
     num_planes: int = 5,
     plot_buffer: int = 50,
     chuck_shape: Tuple[int, int, int] = (200, 200, 200),
+    verbose: bool = False,
 ):
     """Extract a buffered sub‑volume around ``cell_id``.
 
@@ -75,7 +76,8 @@ def extract_cell_volume(
     # ------------------------------------------------------------------
     centroid = get_cell_centroid_voxels(cell_centroids, cell_id)
     cz, cy, cx = centroid
-    print(f"Extracting cell {cell_id} at centroid (z, y, x) = ({cz}, {cy}, {cx})")
+    if verbose:
+        print(f"Extracting cell {cell_id} at centroid (z, y, x) = ({cz}, {cy}, {cx})")
 
     # ------------------------------------------------------------------
     # Chunk the volume
@@ -89,14 +91,12 @@ def extract_cell_volume(
         sy : sy + chuck_shape[1],
         sx : sx + chuck_shape[2],
     ]
-    # print all lables in the chunk
-    print(f"Labels in chunk: {np.unique(seg_chunk)}")
-    # print slices of all orientations for cell
-    print(
-        f"z: {sz} to {sz + chuck_shape[0]}, " f"y: {sy} to {sy + chuck_shape[1]}, " f"x: {sx} to {sx + chuck_shape[2]}"
-    )
-    # print zarr shape
-    print(f"zarr shape: {segmentation_zarr.shape}")
+    if verbose:
+        print(f"Labels in chunk: {np.unique(seg_chunk)}")
+        print(
+            f"z: {sz} to {sz + chuck_shape[0]}, " f"y: {sy} to {sy + chuck_shape[1]}, " f"x: {sx} to {sx + chuck_shape[2]}"
+        )
+        print(f"zarr shape: {segmentation_zarr.shape}")
 
     # Local → global bbox of cell within the chunk
     zz, yy, xx = np.where(seg_chunk == cell_id)

@@ -6,7 +6,7 @@ Z1_CHANNEL_CMAP_VIBRANT = {
     "488": "#4CAF50",  # Soft green
     "514": "#F44336",  # Vibrant red
     "561": "#2196F3",  # Sky blue
-    "594": "#00BCD4",  # Teal
+    "594": "#FF9800",  # Orange
     "638": "#9C27B0",  # Rich purple
 }
 
