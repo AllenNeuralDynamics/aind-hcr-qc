@@ -599,7 +599,7 @@ def plot_all_channels_cell(
         print(f"Reference channel shape: {ref_zarr.shape}")
 
     seg_crop, img_crop, masks_only, cell_mask_only, origin, z_planes, x_planes = zarr_data.extract_cell_volume(
-        segmentation_zarr, ref_zarr, cell_info_array, cell_id, num_planes=num_planes, plot_buffer=plot_buffer, verbose=verbose
+        segmentation_zarr, ref_zarr, cell_info_array, cell_id, num_planes=num_planes, plot_buffer=plot_buffer, 
     )
 
     cell_centroid = cell_info_array[cell_info_array[:, -1] == cell_id, :-1][0]
