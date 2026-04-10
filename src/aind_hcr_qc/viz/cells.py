@@ -2,8 +2,10 @@
 """
 Plotting functions for visualizing single cell expression data across multiple HCR rounds.
 """
-from typing import List
+from typing import List, Dict, Tuple, Optional
+from functools import lru_cache
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -13,14 +15,128 @@ from aind_hcr_qc.utils.utils import saveable_plot
 import aind_hcr_qc.io.zarr_data as zarr_data
 
 # -------------------------------------------------------------------------------------------------
+# Cache for expensive operations
+# -------------------------------------------------------------------------------------------------
+
+_channel_gene_cache: Dict[int, dict] = {}
+
+
+def _get_cached_channel_gene_table(dataset: HCRDataset) -> dict:
+    """Cache the channel-gene mapping to avoid repeated CSV loading."""
+    dataset_id = id(dataset)
+    if (dataset_id not in _channel_gene_cache) or (_channel_gene_cache[dataset_id] is None):
+        try:
+            # Use spots_only=False to include cellular markers like Rn28s (405)
+            channel_gene_table = dataset.create_channel_gene_table(spots_only=False)
+            _channel_gene_cache[dataset_id] = channel_gene_table
+        except Exception:
+            _channel_gene_cache[dataset_id] = None
+    return _channel_gene_cache[dataset_id]
+
+
+def _load_channel_crop(args) -> Tuple[str, Optional[np.ndarray]]:
+    """Helper function for parallel channel loading."""
+    chan, dataset, round_key, pyramid_level, origin, crop_shape = args
+    try:
+        chan_zarr = dataset.load_zarr_channel(round_key, chan, data_type="fused", pyramid_level=pyramid_level)
+        z0, y0, x0 = origin
+        z1, y1, x1 = z0 + crop_shape[0], y0 + crop_shape[1], x0 + crop_shape[2]
+        chan_crop = np.asarray(chan_zarr[0, 0, z0:z1, y0:y1, x0:x1])
+        return chan, chan_crop
+    except Exception:
+        return chan, None
+
+# -------------------------------------------------------------------------------------------------
 # Multi Round
 # -------------------------------------------------------------------------------------------------
 
 
+def plot_cell_gene_expression_ax(cell_id, cellxgene_df, gene_order=None, ax=None, unique_roi_id=None):
+    """
+    Plot a barplot of gene expression for a single cell.
+    
+    Parameters
+    ----------
+    cell_id : int
+        The cell ID to plot
+    cellxgene_df : pd.DataFrame
+        DataFrame with cell_id as index and gene columns with spot counts
+    gene_order : list, optional
+        Order of genes to plot. If None, uses all columns except cluster_id/cluster_label
+    ax : matplotlib.axes.Axes, optional
+        Axes to plot on. If None, creates a new figure
+    unique_roi_id : int or str, optional
+        Unique ROI ID from coreg table to display in the title
+        
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes with the barplot
+    """
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 5))
+    
+    # Get cell data
+    if cell_id not in cellxgene_df.index:
+        ax.text(0.5, 0.5, f"Cell {cell_id} not found", ha='center', va='center', transform=ax.transAxes)
+        ax.axis('off')
+        return ax
+    
+    cell_data = cellxgene_df.loc[cell_id]
+    
+    # Determine gene columns (exclude metadata columns)
+    exclude_cols = ['cluster_id', 'cluster_label', 'supertype_name']
+    if gene_order is None:
+        gene_order = [col for col in cellxgene_df.columns if col not in exclude_cols]
+    
+    # Get values for each gene
+    values = [cell_data.get(gene, 0) for gene in gene_order]
+    
+    # Create barplot
+    bars = ax.bar(range(len(gene_order)), values, color='steelblue', edgecolor='black', linewidth=0.5)
+    ax.set_xticks(range(len(gene_order)))
+    ax.set_xticklabels(gene_order, rotation=90, ha='center', fontsize=18)
+    ax.set_ylabel('Spot count', fontsize=22)
+    ax.set_xlabel('')
+    
+    # Add cluster label if available
+    if 'cluster_label' in cellxgene_df.columns:
+        cluster_label = cell_data.get('cluster_label', '')
+        if unique_roi_id is not None:
+            ax.set_title(f"HCR ID: {cell_id} - {cluster_label} - ROIcat ID: {unique_roi_id}", fontsize=22)
+        else:
+            ax.set_title(f"HCR ID: {cell_id} - {cluster_label}", fontsize=22)
+    else:
+        if unique_roi_id is not None:
+            ax.set_title(f"HCR ID: {cell_id} - Unique ROIcat ID: {unique_roi_id}", fontsize=22)
+        else:
+            ax.set_title(f"HCR ID: {cell_id}", fontsize=22)
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Adjust the axes position to leave room for x-tick labels within the allocated space
+    # This prevents the labels from extending beyond the subplot area
+    ax.tick_params(axis='x', pad=2)
+    ax.tick_params(axis='y', labelsize=16)
+    
+    return ax
+
+
 @saveable_plot()
 def plot_single_cell_expression_all_rounds(
-    plot_cell_id: int, dataset: HCRDataset, pyramid_level: str = "0", rounds: List[str] = None, vmin_vmax = "auto", verbose: bool = False,
-    linear_unmix_matrix=None
+    plot_cell_id: int, dataset: HCRDataset, 
+    pyramid_level: str = "0", 
+    rounds: List[str] = None, 
+    vmin_vmax = "auto", 
+    verbose: bool = False,
+    linear_unmix_matrix=None,
+    cellxgene_df=None,
+    gene_order=None,
+    coreg_table=None,
 ) -> plt.Figure:
     """
     Plot single cell expression across multiple HCR rounds in a compact vertical layout.
@@ -41,6 +157,13 @@ def plot_single_cell_expression_all_rounds(
         Zarr pyramid level for image resolution, by default "0" (full resolution)
     verbose : bool, optional
         Whether to print detailed processing information, by default False
+    linear_unmix_matrix : np.ndarray, optional
+        Matrix for linear unmixing of channels
+    cellxgene_df : pd.DataFrame, optional
+        DataFrame with cell_id as index and gene expression columns. If provided,
+        the first row will include a gene expression barplot taking up 2 panels.
+    gene_order : list, optional
+        Order of genes for the barplot. If None, uses all gene columns.
 
     Returns
     -------
@@ -55,6 +178,7 @@ def plot_single_cell_expression_all_rounds(
     - Uses tight layout with minimal spacing between rounds
     - Each round is displayed as a subfigure with channel titles showing gene names
     - Handles missing data gracefully with error messages
+    - If cellxgene_df is provided, the first row (R1) will show a barplot in the first 2 panels
 
     Examples
     --------
@@ -76,8 +200,11 @@ def plot_single_cell_expression_all_rounds(
     if not isinstance(rounds, list):
         raise ValueError("Rounds must be a list of round identifiers (e.g., ['R1', 'R2', ...])")
 
+    # Determine if we're adding the barplot to the first row
+    include_barplot = cellxgene_df is not None
+
     # Create a single parent figure
-    fig = plt.figure(figsize=(20, 5 * len(rounds)))
+    fig = plt.figure(figsize=(20, 4 * len(rounds)))
 
     # Create a GridSpec layout
     gs = gridspec.GridSpec(
@@ -89,41 +216,139 @@ def plot_single_cell_expression_all_rounds(
         # Create a subfigure from the gridspec
         subfig = fig.add_subfigure(gs[i, :])
 
-        try:
-            # Plot directly on the subfigure
-            plot_all_channels_cell(
-                dataset=dataset,
-                round_key=round_n,
-                cell_id=plot_cell_id,
-                pyramid_level=pyramid_level,
-                vmin_vmax=vmin_vmax,  # Use 5th-95th percentile
-                plot_mask_outlines=True,
-                trim_to_square=True,  # Default - trim to square
-                figsize=None,  # Wide figure for single row
-                verbose=verbose,
-                fig=subfig,  # Pass the subfigure
-                linear_unmix_matrix=linear_unmix_matrix
-            )
-        except Exception as e:
-            print(f"Error plotting round {round_n} for cell {plot_cell_id}: {e}")
-            # add a placeholder for the subfigure, say an empty plot
-            subfig.add_subplot(111).text(0.5, 0.5, f"Error: {e}", fontsize=12, ha="center", va="center")
-            plt.axis("off")
-            plt.tight_layout()
-            continue
+        # For the first round with barplot, create a custom layout
+        if i == 0 and include_barplot:
+            try:
+                # Get channel count to determine layout
+                channels = dataset.get_channels(round_n)
+                
+                # Use channel_gene_table to determine which channels have genes
+                # This handles cases like R1 where some channels don't have genes (e.g., Syto59)
+                channel_gene_table = _get_cached_channel_gene_table(dataset)
+                if channel_gene_table is not None:
+                    # Get channels that have genes for this round (from spots_only=False table)
+                    # Filter to only include channels with actual gene probes
+                    round_col = "Round" if "Round" in channel_gene_table.columns else "round"
+                    channel_col = "Channel" if "Channel" in channel_gene_table.columns else "channel"
+                    gene_col = "Gene" if "Gene" in channel_gene_table.columns else "gene"
+                    
+                    round_genes = channel_gene_table[channel_gene_table[round_col] == round_n]
+                    # Get channels that have genes (exclude non-gene markers like Syto59)
+                    # Filter out known non-gene markers
+                    exclude_markers = ["Syto59", "Syto", "SYTO"]
+                    round_genes_filtered = round_genes[~round_genes[gene_col].str.contains('|'.join(exclude_markers), case=False, na=False)]
+                    gene_channels = [str(ch) for ch in round_genes_filtered[channel_col].values]
+                    # For R1, also include 405 channel (cellular marker) at the beginning
+                    if round_n == "R1" and "405" in channels and "405" not in gene_channels:
+                        gene_channels = ["405"] + gene_channels
+                    # Sort by channel number to maintain consistent order
+                    gene_channels = sorted(gene_channels, key=lambda x: int(x))
+                    if verbose:
+                        print(f"Gene channels for {round_n}: {gene_channels}")
+                else:
+                    # Fallback: use all channels except known non-gene channels
+                    gene_channels = sorted(channels, key=lambda x: int(x))
+                
+                n_gene_channels = len(gene_channels)
+                
+                # Create GridSpec within subfigure with 2 rows:
+                # Row 0 (top half): image panels and barplot data area
+                # Row 1 (bottom half): empty space for barplot x-axis labels
+                # First n_gene_channels columns for image panels, 1 spacer column, last 3 columns for barplot
+                total_cols = n_gene_channels + 1 + 3  # images + spacer + barplot
+                # Use width_ratios to make the spacer column narrower
+                width_ratios = [1] * n_gene_channels + [0.3] + [1, 1, 1]  # spacer is 0.3 width
+                # Use height_ratios: top row gets 50%, bottom row for labels gets 50%
+                inner_gs = gridspec.GridSpec(2, total_cols, figure=subfig, wspace=0.05, hspace=0.0, 
+                                            width_ratios=width_ratios, height_ratios=[1, 1])
+                
+                # Extract round number from round_n (e.g., "R1" -> "1")
+                round_num = round_n.replace("R", "") if round_n.startswith("R") else round_n
+                
+                # Plot gene channels in columns 0 to (n_gene_channels - 1)
+                plot_all_channels_cell(
+                    dataset=dataset,
+                    round_key=round_n,
+                    cell_id=plot_cell_id,
+                    pyramid_level=pyramid_level,
+                    vmin_vmax=vmin_vmax,
+                    plot_mask_outlines=True,
+                    trim_to_square=True,
+                    figsize=None,
+                    verbose=verbose,
+                    fig=subfig,
+                    linear_unmix_matrix=linear_unmix_matrix,
+                    row_label=f"Round {round_num}",
+                    start_col_index=0,  # Start at column 0
+                    total_cols=total_cols,  # Total number of columns in the grid (includes spacer)
+                    max_channels=n_gene_channels,  # Plot all gene channels
+                    include_channels=gene_channels,  # Only include these specific channels
+                    inner_gs=inner_gs,  # Pass the GridSpec with custom width_ratios
+                )
+                
+                # Create axes for barplot (spans last 3 columns, after the spacer)
+                # Use only row 0 (top half) for the barplot
+                ax_barplot = subfig.add_subplot(inner_gs[0, -3:])
+                
+                # Get unique_roi_id from coreg_table if provided
+                unique_roi_id = None
+                if coreg_table is not None:
+                    try:
+                        unique_roi_id = coreg_table[coreg_table.hcr_id == plot_cell_id].unique_roicat_id.values[0]
+                    except (KeyError, IndexError):
+                        pass
+                
+                plot_cell_gene_expression_ax(plot_cell_id, cellxgene_df, gene_order=gene_order, ax=ax_barplot, unique_roi_id=unique_roi_id)
+                
+                # Adjust barplot position to align with image panels and leave room for x-labels
+                # Get the position and shrink it to leave room at the bottom for labels
+                pos = ax_barplot.get_position()
+                # Shrink height by 50% from the bottom to leave room for rotated x-tick labels
+                new_height = pos.height * 0.50
+                new_bottom = pos.y0 + (pos.height - new_height)  # Move up by the amount we shrunk
+                ax_barplot.set_position([pos.x0, new_bottom, pos.width, new_height])
+            except Exception as e:
+                print(f"Error plotting round {round_n} for cell {plot_cell_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                subfig.add_subplot(111).text(0.5, 0.5, f"Error: {e}", fontsize=12, ha="center", va="center")
+                plt.axis("off")
+                continue
+        else:
+            try:
+                # Extract round number from round_n (e.g., "R1" -> "1")
+                round_num = round_n.replace("R", "") if round_n.startswith("R") else round_n
+                
+                # Plot directly on the subfigure
+                plot_all_channels_cell(
+                    dataset=dataset,
+                    round_key=round_n,
+                    cell_id=plot_cell_id,
+                    pyramid_level=pyramid_level,
+                    vmin_vmax=vmin_vmax,
+                    plot_mask_outlines=True,
+                    trim_to_square=True,
+                    figsize=None,
+                    verbose=verbose,
+                    fig=subfig,
+                    linear_unmix_matrix=linear_unmix_matrix,
+                    row_label=f"Round {round_num}"
+                )
+            except Exception as e:
+                print(f"Error plotting round {round_n} for cell {plot_cell_id}: {e}")
+                subfig.add_subplot(111).text(0.5, 0.5, f"Error: {e}", fontsize=12, ha="center", va="center")
+                plt.axis("off")
+                plt.tight_layout()
+                continue
 
-        # Add title to the subfigure
-        subfig.suptitle(f"Round {round_n}", fontsize=16, y=0.98)
-
-    # Add overall title
-    fig.suptitle(f"Cell ID {plot_cell_id}", fontsize=18, y=1.05)
-    # plt.subplots_adjust(
-    #     top=0.95,
-    #     bottom=0.05,
-    #     left=0.02,
-    #     right=0.98,
-    #     hspace=0.1  # Small height spacing
-    # )
+    # Determine if using fixed LUT
+    is_fixed_lut = isinstance(vmin_vmax, (tuple, list)) and len(vmin_vmax) == 2
+    
+    # Add overall title - include LUT if fixed
+    if is_fixed_lut:
+        fig.suptitle(f"Cell ID {plot_cell_id}  |  LUT=[{vmin_vmax[0]:.0f}-{vmin_vmax[1]:.0f}]", fontsize=18, y=1.05)
+    else:
+        fig.suptitle(f"Cell ID {plot_cell_id}", fontsize=18, y=1.05)
 
     plt.tight_layout()
     return fig
@@ -256,6 +481,13 @@ def plot_all_channels_cell(
     fig=None,
     verbose=False,
     linear_unmix_matrix=None,
+    row_label=None,
+    start_col_index=0,
+    total_cols=None,
+    max_channels=None,
+    skip_channels=None,
+    include_channels=None,
+    inner_gs=None,
 ):
     """
     Plot segmentation crops for all channels in an HCRDataset round for a specific cell.
@@ -285,6 +517,23 @@ def plot_all_channels_cell(
         Whether to trim images to square aspect ratio (default: True)
     fig : matplotlib.figure.Figure or matplotlib.figure.SubFigure, optional
         Existing figure or subfigure to plot into. If None, creates a new figure.
+    row_label : str, optional
+        Label to display as ylabel on the first axis (e.g., "Round R1")
+    start_col_index : int, optional
+        Starting column index for placing axes (default: 0). Used when other elements
+        occupy the first columns of the grid.
+    total_cols : int, optional
+        Total number of columns in the grid. If None, uses number of channels.
+    max_channels : int, optional
+        Maximum number of channels to plot. If None, plots all channels.
+    skip_channels : list, optional
+        List of channel names to skip (e.g., ["405"] to skip reference channel).
+    include_channels : list, optional
+        List of channel names to include. If provided, only these channels will be plotted
+        (takes precedence over skip_channels).
+    inner_gs : matplotlib.gridspec.GridSpec, optional
+        Pre-created GridSpec to use for placing axes. If provided, axes will be created
+        using this GridSpec instead of creating new subplots.
 
     Returns:
     --------
@@ -311,64 +560,75 @@ def plot_all_channels_cell(
         print(f"Available channels: {channels_sorted}")
 
     # Get gene mapping for channel titles
-    try:
-        channel_gene_table = dataset.create_channel_gene_table(spots_only=False)
-        round_genes = channel_gene_table[channel_gene_table["Round"] == round_key]
-        channel_to_gene = dict(zip(round_genes["Channel"].astype(str), round_genes["Gene"]))
+    channel_gene_table = _get_cached_channel_gene_table(dataset)
+    if channel_gene_table is not None:
+        # Handle both capitalized and lowercase column names
+        round_col = "Round" if "Round" in channel_gene_table.columns else "round"
+        channel_col = "Channel" if "Channel" in channel_gene_table.columns else "channel"
+        gene_col = "Gene" if "Gene" in channel_gene_table.columns else "gene"
+        
+        round_genes = channel_gene_table[channel_gene_table[round_col] == round_key]
+        channel_to_gene = dict(zip(round_genes[channel_col].astype(str), round_genes[gene_col]))
         if verbose:
             print(f"Channel-gene mapping: {channel_to_gene}")
-    except Exception as e:
-        print(f"Warning: Could not load gene mapping: {e}")
+    else:
+        if verbose:
+            print(f"Warning: Could not load gene mapping")
         channel_to_gene = {}
 
     # Load cell info and segmentation data
-
-    print("\nLoading cell info and segmentation data...")
+    if verbose:
+        print("\nLoading cell info and segmentation data...")
     # cell_info_df = dataset.get_cell_info(source="segmentation")
     cell_info_df = dataset.rounds[round_key].get_cell_info(source="mixed_cxg")
-    print(cell_info_df.describe())
+    if verbose:
+        print(cell_info_df.describe())
     cell_info_array = cell_info_df[["z_centroid", "y_centroid", "x_centroid", "cell_id"]].to_numpy()
     segmentation_zarr = dataset.load_segmentation_mask(round_key, pyramid_level)
 
     # Get reference channel for segmentation overlay (usually 405)
     ref_channel = "405" if "405" in channels else channels_sorted[0]
-    print(f"Using reference channel {ref_channel} for segmentation overlay")
+    if verbose:
+        print(f"Using reference channel {ref_channel} for segmentation overlay")
 
     # Extract cell volume using reference channel
-    print(f"Extracting cell volume for cell {cell_id}...")
+    if verbose:
+        print(f"Extracting cell volume for cell {cell_id}...")
     ref_zarr = dataset.load_zarr_channel(round_key, ref_channel, data_type="fused", pyramid_level=pyramid_level)
-    print(f"Reference channel shape: {ref_zarr.shape}")
+    if verbose:
+        print(f"Reference channel shape: {ref_zarr.shape}")
 
     seg_crop, img_crop, masks_only, cell_mask_only, origin, z_planes, x_planes = zarr_data.extract_cell_volume(
-        segmentation_zarr, ref_zarr, cell_info_array, cell_id, num_planes=num_planes, plot_buffer=plot_buffer
+        segmentation_zarr, ref_zarr, cell_info_array, cell_id, num_planes=num_planes, plot_buffer=plot_buffer, 
     )
 
     cell_centroid = cell_info_array[cell_info_array[:, -1] == cell_id, :-1][0]
-    print(f"Cell centroid (z, y, x): {cell_centroid}")
+    if verbose:
+        print(f"Cell centroid (z, y, x): {cell_centroid}")
 
-    print(f"Cell crop shape: {seg_crop.shape}")
-    print(f"Origin: {origin}")
-    print(f"Z-planes: {z_planes}")
+        print(f"Cell crop shape: {seg_crop.shape}")
+        print(f"Origin: {origin}")
+        print(f"Z-planes: {z_planes}")
 
     # Load all channel data
-    print("\nLoading channel data...")
+    if verbose:
+        print("\nLoading channel data...")
     channel_arrays = {}
-    for chan in channels_sorted:
-        try:
-            chan_zarr = dataset.load_zarr_channel(round_key, chan, data_type="fused", pyramid_level=pyramid_level)
-            # Crop the channel data to match segmentation crop
-            z0, y0, x0 = origin
-            z1, y1, x1 = z0 + seg_crop.shape[0], y0 + seg_crop.shape[1], x0 + seg_crop.shape[2]
-            chan_crop = np.asarray(chan_zarr[0, 0, z0:z1, y0:y1, x0:x1])
-            channel_arrays[chan] = chan_crop
-            print(f"  Channel {chan}: loaded, shape {chan_crop.shape}")
-        except Exception as e:
-            print(f"  Channel {chan}: failed to load - {e}")
-            continue
+    with ThreadPoolExecutor() as executor:
+        args = [(chan, dataset, round_key, pyramid_level, origin, seg_crop.shape) for chan in channels_sorted]
+        results = executor.map(_load_channel_crop, args)
+        for chan, chan_crop in results:
+            if chan_crop is not None:
+                channel_arrays[chan] = chan_crop
+                if verbose:
+                    print(f"  Channel {chan}: loaded, shape {chan_crop.shape}")
+            else:
+                if verbose:
+                    print(f"  Channel {chan}: failed to load")
     if verbose:
         print(f"Successfully loaded {len(channel_arrays)} channels")
 
-    if linear_unmix_matrix is not None:
+    if (linear_unmix_matrix is not None) and (round_key != 'R1'):
         chan_names = list(channel_arrays.keys())
         img_arrays = list(channel_arrays.values())
         # if channel =405, remove
@@ -376,9 +636,10 @@ def plot_all_channels_cell(
             idx_405 = chan_names.index("405")
             chan_names.pop(idx_405)
             img_arrays.pop(idx_405)
-            print("Removing channel 405 for linear unmixing")
+            # print("Removing channel 405 for linear unmixing")
         img_stack = np.stack(img_arrays, axis=-1)  # shape (Y, X, C)
-        print(f"Applying linear unmixing with matrix shape {linear_unmix_matrix.shape}...")
+        if verbose:
+            print(f"Applying linear unmixing with matrix shape {linear_unmix_matrix.shape}...")
         unmixed_stack = linear_unmix(
             img_stack,
             linear_unmix_matrix,
@@ -392,8 +653,10 @@ def plot_all_channels_cell(
 
         for i, chan in enumerate(chan_names):
             channel_arrays[chan] = unmixed_stack[..., i]
-            print(f"  Channel {chan}: unmixed")
-        print("Linear unmixing completed.")
+            if verbose:
+                print(f"  Channel {chan}: unmixed")
+        if verbose:
+            print("Linear unmixing completed.")
     # -------------------------------------------------------------------------------------------------
 
 
@@ -403,7 +666,7 @@ def plot_all_channels_cell(
         print("No channels loaded successfully!")
         return None
 
-    cols = n_channels  # All channels in one row
+    cols = total_cols if total_cols is not None else n_channels  # Use total_cols if provided
     rows = 1
 
     if figsize is None:
@@ -421,17 +684,52 @@ def plot_all_channels_cell(
             axes = axes.flatten()  # Ensure it's always a 1D array
     else:
         # Use provided figure/subfigure - create subplots within it
+        # Determine how many axes to create based on max_channels or remaining space
+        if max_channels is not None:
+            n_axes_to_create = max_channels
+        else:
+            n_axes_to_create = cols - start_col_index
         axes = []
-        for i in range(n_channels):
-            ax = fig.add_subplot(rows, cols, i + 1)
+        for i in range(n_axes_to_create):
+            if inner_gs is not None:
+                # Use the provided GridSpec - span all rows if multi-row
+                ax = fig.add_subplot(inner_gs[:, start_col_index + i])
+            else:
+                ax = fig.add_subplot(rows, cols, start_col_index + i + 1)
             axes.append(ax)
 
     # Select middle z-plane for display
     middle_z = z_planes[len(z_planes) // 2]
-    print(f"Plotting middle z-plane: {middle_z} (global z: {origin[0] + middle_z})")
+    if verbose:
+        print(f"Plotting middle z-plane: {middle_z} (global z: {origin[0] + middle_z})")
+
+    # Determine if using fixed LUT (same for all channels)
+    is_fixed_lut = isinstance(vmin_vmax, (tuple, list)) and len(vmin_vmax) == 2
+    if is_fixed_lut:
+        fixed_vmin, fixed_vmax = vmin_vmax
 
     # Plot each channel
-    for i, chan in enumerate(channel_arrays.keys()):
+    # Determine which channels to plot based on include_channels, skip_channels, etc.
+    channels_to_plot = list(channel_arrays.keys())
+    
+    # If include_channels is specified, only include those channels (takes precedence)
+    if include_channels is not None:
+        channels_to_plot = [ch for ch in channels_to_plot if ch in include_channels]
+        # Sort by the order in include_channels to maintain specified order
+        channels_to_plot = sorted(channels_to_plot, key=lambda x: include_channels.index(x) if x in include_channels else float('inf'))
+    elif skip_channels is not None:
+        # Skip specified channels (e.g., 405 reference channel)
+        channels_to_plot = [ch for ch in channels_to_plot if ch not in skip_channels]
+    
+    if start_col_index > 0 and total_cols is not None:
+        # Only plot channels that fit in the remaining space
+        n_channels_to_plot = total_cols - start_col_index
+        channels_to_plot = channels_to_plot[:n_channels_to_plot]
+    
+    if max_channels is not None:
+        channels_to_plot = channels_to_plot[:max_channels]
+
+    for i, chan in enumerate(channels_to_plot):
         ax = axes[i]
 
         chan_data = channel_arrays[chan]
@@ -448,12 +746,13 @@ def plot_all_channels_cell(
                 vmax = vmax_99
             else:
                 vmax = 600
-        elif isinstance(vmin_vmax, (tuple, list)) and len(vmin_vmax) == 2:
-            vmin, vmax = vmin_vmax
+        elif is_fixed_lut:
+            vmin, vmax = fixed_vmin, fixed_vmax
         else:
             vmin, vmax = chan_data.min(), chan_data.max()
 
-        print(f"  Channel {chan}: vmin={vmin:.1f}, vmax={vmax:.1f}")
+        if verbose:
+            print(f"  Channel {chan}: vmin={vmin:.1f}, vmax={vmax:.1f}")
 
         # Get the middle z-plane
         img_slice = chan_data[middle_z, :, :]
@@ -472,7 +771,8 @@ def plot_all_channels_cell(
             # Crop the image and masks
             img_slice = img_slice[y_start:y_end, x_start:x_end]
 
-            print(f"  Channel {chan}: trimmed from {h}x{w} to {min_dim}x{min_dim}")
+            if verbose:
+                print(f"  Channel {chan}: trimmed from {h}x{w} to {min_dim}x{min_dim}")
 
         # Plot the image
         ax.imshow(img_slice, cmap="gray", vmin=vmin, vmax=vmax, aspect="equal")
@@ -490,19 +790,37 @@ def plot_all_channels_cell(
             ax.imshow(mask_slice, alpha=0.25, cmap="magma", aspect="equal")
             ax.imshow(cell_mask_slice, alpha=0.5, cmap="hsv", aspect="equal")
 
-        # Set title with gene name if available
+        # Set title - include LUT only if adaptive (not fixed for all channels)
         gene_name = channel_to_gene.get(chan, "Unknown")
-        title = f"Ch {chan}"
-        if gene_name != "Unknown":
-            title += f" ({gene_name})"
-        title += f"   \nLUT=[{vmin:.0f}-{vmax:.0f}]"
-
-        ax.set_title(title, fontsize=14, fontweight="bold")
+        if is_fixed_lut:
+            # Fixed LUT - show only gene name, LUT will be in suptitle
+            if gene_name != "Unknown":
+                title = f"{gene_name}"
+            else:
+                title = f"Ch {chan}"
+        ax.set_title(title, fontsize=24)
         # axis off
         ax.axis("off")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.tick_params(labelsize=8)
+
+        # Add row label to the first axis if provided
+        if i == 0 and row_label is not None:
+            ax.set_ylabel(row_label, fontsize=24, rotation=90, labelpad=10)
+        # Add row label to the first axis if provided
+        if i == 0 and row_label is not None:
+            ax.set_ylabel(row_label, fontsize=24, rotation=90, labelpad=10)
+        ax.tick_params(labelsize=8)
+
+        # Add row label to the first axis if provided
+        if i == 0 and row_label is not None:
+            ax.set_ylabel(row_label, fontsize=22, rotation=90, labelpad=10)
+            ax.axis("on")
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
 
     # Adjust layout only if we created our own figure (not using a subfigure)
     # Check if we're working with a subfigure by looking at the type
@@ -510,7 +828,7 @@ def plot_all_channels_cell(
 
     if not is_subfigure:
         plt.tight_layout()
-        plt.subplots_adjust(top=0.80)  # Adjust top margin for title
+        plt.subplots_adjust(top=0.90)  # Adjust top margin for title
 
     if trim_to_square:
         # Ensure all axes are square
