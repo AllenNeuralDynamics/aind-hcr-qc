@@ -802,3 +802,68 @@ def plot_top_spot_count_cells_batch(
     print(f"Summary saved to: {summary_file}")
 
     return saved_files
+
+
+# ----
+# Centroids
+# ----
+def compute_cell_centroids_from_spots(spots_df, cell_id_col="cell_id"):
+    """
+    Compute mean x, y, z centroid for each cell from a spots DataFrame.
+
+    Averages across all spots belonging to each cell regardless of channel,
+    round, or assignment status — giving a spatial centroid estimate per cell.
+
+    Parameters
+    ----------
+    spots_df : pd.DataFrame
+        Spots table with at least columns: cell_id, x, y, z.
+    cell_id_col : str
+        Column name identifying the cell each spot belongs to.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per cell with columns: cell_id, x_mean, y_mean, z_mean, n_spots.
+    """
+    return (
+        spots_df
+        .groupby(cell_id_col)[["x", "y", "z"]]
+        .agg(
+            x_mean=("x", "mean"),
+            y_mean=("y", "mean"),
+            z_mean=("z", "mean"),
+            n_spots=("x", "count"),
+        )
+        .reset_index()
+    )
+
+
+def get_cell_centroid_from_spots(spots_df, cell_id, cell_id_col="cell_id"):
+    """
+    Return the x, y, z centroid for a single cell as a dict.
+
+    Parameters
+    ----------
+    spots_df : pd.DataFrame
+        Spots table with at least columns: cell_id, x, y, z.
+    cell_id : int or str
+        The cell to compute the centroid for.
+    cell_id_col : str
+        Column name identifying the cell each spot belongs to.
+
+    Returns
+    -------
+    dict with keys: cell_id, x_mean, y_mean, z_mean, n_spots.
+    Raises ValueError if cell_id is not found.
+    """
+    sub = spots_df[spots_df[cell_id_col] == cell_id]
+    if sub.empty:
+        raise ValueError(f"cell_id {cell_id!r} not found in spots_df.")
+    return {
+        cell_id_col: cell_id,
+        "x_mean":  int(round(sub["x"].mean())),
+        "y_mean":  int(round(sub["y"].mean())),
+        "z_mean":  int(round(sub["z"].mean())),
+        "n_spots": int(len(sub)),
+    }

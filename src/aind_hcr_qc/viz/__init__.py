@@ -42,6 +42,13 @@ from .cluster_similarity import (
     plot_match_summary,
     plot_matched_centroid_heatmap,
 )
+from .single_cell_unmixing import (
+    plot_spot_projection,
+    plot_spot_measure_distributions,
+    plot_cell_qc,
+    plot_spot_nn_distances,
+    plot_adjacent_channel_scatter,
+)
 
 __all__ = [
     "CHANNEL_COLORS",
@@ -84,4 +91,10 @@ __all__ = [
     "plot_similarity_heatmap",
     "plot_match_summary",
     "plot_matched_centroid_heatmap",
+    # single-cell unmixing QC
+    "plot_spot_projection",
+    "plot_spot_measure_distributions",
+    "plot_cell_qc",
+    "plot_spot_nn_distances",
+    "plot_adjacent_channel_scatter",
 ]
