@@ -271,33 +271,44 @@ def compute_spot_crosstalk_scores_intensity(spots_df, mixed_ref_df, ratios_df,
     out = spots_df.copy().reset_index(drop=True)
 
     dist_cols = compute_dye_line_distances_numpy(out, ratios_df, chan_order=chan_order)
-    out = pd.concat([out, dist_cols.reset_index(drop=True)], axis=1)
+    for col in dist_cols.columns:
+        out[col] = dist_cols[col].values
 
-    out["d_assignment_ratio"] = np.nan
-    for ch in chan_order:
-        d_col = f"d_{ch}"
-        if d_col not in out.columns:
-            continue
-        mask = out["unmixed_chan"] == ch
-        if not mask.any():
-            continue
-        others  = [f"d_{c}" for c in chan_order if c != ch and f"d_{c}" in out.columns]
-        d_other = out.loc[mask, others].min(axis=1).replace(0, np.nan)
-        out.loc[mask, "d_assignment_ratio"] = out.loc[mask, d_col] / d_other
+    # Vectorised d_assignment_ratio: use numpy fancy indexing instead of per-channel .loc loops
+    d_cols_present = [f"d_{ch}" for ch in chan_order if f"d_{ch}" in out.columns]
+    d_ratio = np.full(len(out), np.nan)
+    if d_cols_present:
+        chan_labels = [c[2:] for c in d_cols_present]          # strip "d_" prefix
+        chan_to_idx = {ch: i for i, ch in enumerate(chan_labels)}
+        d_matrix = out[d_cols_present].values.astype(np.float64)  # (n_spots, n_ch)
+        assigned_idx = out["unmixed_chan"].map(chan_to_idx)         # NaN where channel unknown
+        valid = assigned_idx.notna().values
+        row_idx = np.where(valid)[0]
+        col_idx = assigned_idx.dropna().astype(int).values
+        if len(row_idx):
+            d_assigned = d_matrix[row_idx, col_idx]
+            d_others = d_matrix[row_idx].copy()
+            d_others[np.arange(len(row_idx)), col_idx] = np.inf
+            d_min_other = d_others.min(axis=1)
+            d_min_other[d_min_other == 0] = np.nan
+            d_ratio[row_idx] = d_assigned / d_min_other
+    out["d_assignment_ratio"] = d_ratio
 
     ref = mixed_ref_df[
         (mixed_ref_df["round"] == round_id) & (mixed_ref_df["removed"])
     ]
 
-    out["chan_intensity"]      = np.nan
-    out["z_intensity_vs_removed"] = np.nan
+    # Pre-allocate numpy arrays; fill by positional index; assign once to avoid repeated .loc writes
+    chan_intensity_arr = np.full(len(out), np.nan)
+    z_arr = np.full(len(out), np.nan)
+    unmixed = out["unmixed_chan"].values
 
     for ch in chan_order:
         int_col = f"chan_{ch}_intensity"
         if int_col not in out.columns:
             continue
-        mask = out["unmixed_chan"] == ch
-        if not mask.any():
+        row_idx = np.where(unmixed == ch)[0]
+        if len(row_idx) == 0:
             continue
 
         ref_vals = ref.loc[ref["chan"] == ch, int_col].dropna()
@@ -309,9 +320,12 @@ def compute_spot_crosstalk_scores_intensity(spots_df, mixed_ref_df, ratios_df,
         if ref_mad < 1e-10:
             ref_mad = ref_vals.std()
 
-        spot_int = out.loc[mask, int_col]
-        out.loc[mask, "chan_intensity"]       = spot_int
-        out.loc[mask, "z_intensity_vs_removed"] = (spot_int - ref_med) / (ref_mad * 1.4826)
+        spot_int = out[int_col].values[row_idx]
+        chan_intensity_arr[row_idx] = spot_int
+        z_arr[row_idx] = (spot_int - ref_med) / (ref_mad * 1.4826)
+
+    out["chan_intensity"] = chan_intensity_arr
+    out["z_intensity_vs_removed"] = z_arr
 
     dim_penalty = np.maximum(0, -out["z_intensity_vs_removed"])
 
