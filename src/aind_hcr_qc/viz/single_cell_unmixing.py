@@ -13,7 +13,7 @@ Three complementary views for one cell × one round:
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-from aind_hcr_qc.utils import saveable_plot
+from aind_hcr_qc.utils.utils import saveable_plot
 
 from aind_hcr_qc.constants import Z1_CHANNEL_CMAP_VIBRANT
 
@@ -21,7 +21,7 @@ CHAN_ORDER = ["488", "514", "561", "594", "638"]
 CHAN_COLORS = {k: v for k, v in Z1_CHANNEL_CMAP_VIBRANT.items() if k in CHAN_ORDER}
 
 
-@saveable_plot
+@saveable_plot()
 def plot_spot_projection(
     m_cell,
     u_cell,

@@ -5,7 +5,7 @@ import pandas as pd
 import seaborn as sns
 import numpy as np
 
-
+from aind_hcr_qc.utils.utils import saveable_plot
 # --
 # Utils
 # ---
@@ -47,6 +47,7 @@ def annotate_spots_df(mixed_df, unmixed_df):
 # Plots
 # ---
 
+@saveable_plot()
 def plot_removal_metric_distributions(mixed_df, round_id, chan_order=["488", "514", "561", "594", "638"], chan_colors=None):
 
     """
@@ -145,7 +146,7 @@ def plot_removal_metric_distributions(mixed_df, round_id, chan_order=["488", "51
                 ax.legend(fontsize=6, framealpha=0.8)
 
     plt.tight_layout()
-    plt.show()
+    return fig
 
 
 
