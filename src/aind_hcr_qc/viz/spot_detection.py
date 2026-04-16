@@ -348,7 +348,8 @@ def compute_spot_crosstalk_scores_intensity(spots_df, mixed_ref_df, ratios_df,
 
 
 def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
-                                     chan_order=["488", "514", "561", "594", "638"], chan_colors=None):
+                                     chan_order=["488", "514", "561", "594", "638"], chan_colors=None,
+                                     subfig=None):
     """plot_crosstalk_scores variant for z_intensity_vs_removed columns."""
     if chan_colors is None:
         chan_colors = {}
@@ -359,7 +360,13 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
     THRESHOLD = 1.0
     title = (f"Cell {cell_id}  Round {round_id} — " if cell_id else f"Round {round_id} — ")
 
-    fig, axes = plt.subplots(2, n_ch, figsize=(n_ch * 3.2, 7), squeeze=False)
+    if subfig is None:
+        fig, axes = plt.subplots(2, n_ch, figsize=(n_ch * 3.2, 7), squeeze=False)
+        _standalone = True
+    else:
+        fig = subfig
+        axes = subfig.subplots(2, n_ch, squeeze=False)
+        _standalone = False
     fig.suptitle(title + "Crosstalk score  (intensity z-score vs removed)",
                  fontsize=11, y=1.02)
 
@@ -426,8 +433,9 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
         ax1.tick_params(labelsize=6)
         ax1.spines[["top", "right"]].set_visible(False)
 
-    plt.tight_layout()
-    plt.show()
+    plt.tight_layout() if _standalone else None
+    if _standalone:
+        plt.show()
 
     print(f"\n{'Ch':>5}  {'n':>6}  {'med_ratio':>10}  {'med_z_int':>10}  "
           f"{'med_score':>10}  {'% score>1':>10}")

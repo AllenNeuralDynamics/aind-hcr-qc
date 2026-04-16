@@ -14,6 +14,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from aind_hcr_qc.utils.utils import saveable_plot
+from aind_hcr_qc.viz.cells import plot_single_cell_expression_all_rounds, get_cell_centroid_from_spots
+from aind_hcr_qc.viz.spot_detection import plot_crosstalk_scores_intensity
 
 from aind_hcr_qc.constants import Z1_CHANNEL_CMAP_VIBRANT
 
@@ -31,6 +33,7 @@ def plot_spot_projection(
     chan_colors=CHAN_COLORS,
     figsize=(20, 5),
     removed_style="outline",
+    crosstalk_threshold=1.0,
     subfig=None,
 ):
     """
@@ -53,25 +56,42 @@ def plot_spot_projection(
         Round identifier used in the figure title (e.g. ``"R1"``).
     removed_style : ``"x"`` | ``"outline"``
         How to mark removed spots on the before panel.
+    crosstalk_threshold : float
+        Spots with ``crosstalk_score`` below this value are counted as
+        post-crosstalk-filter survivors (right bar panel).  Only used when
+        ``u_cell`` contains a ``crosstalk_score`` column.
     subfig : matplotlib.figure.SubFigure, optional
         If provided, draw into this subfigure instead of creating a new figure.
         The caller is responsible for calling ``plt.show()``.
     """
     has_removed = "removed" in m_cell.columns
+    has_gene = "unmixed_gene" in u_cell.columns
+    has_crosstalk = "crosstalk_score" in u_cell.columns
+
+    # dynamic figure height: accommodate per-gene label rows
+    if has_gene:
+        _n_labels = sum(
+            len(u_cell.loc[u_cell["unmixed_chan"] == ch, "unmixed_gene"].unique())
+            for ch in chan_order
+        )
+        _fig_h = max(figsize[1], _n_labels * 0.45 + 1)
+    else:
+        _fig_h = figsize[1]
 
     if subfig is None:
-        fig = plt.figure(figsize=(figsize[0] + 6, figsize[1]))
+        fig = plt.figure(figsize=(figsize[0] + 8, _fig_h))
         _standalone = True
     else:
         fig = subfig
         _standalone = False
 
-    gs = GridSpec(1, 5, figure=fig, width_ratios=[1, 1, 1, 0.45, 0.45], wspace=0.08)
+    gs = GridSpec(1, 6, figure=fig, width_ratios=[1, 1, 1, 0.4, 0.4, 0.4], wspace=0.08)
     ax0 = fig.add_subplot(gs[0])
     ax1 = fig.add_subplot(gs[1], sharex=ax0, sharey=ax0)
     ax2 = fig.add_subplot(gs[2], sharex=ax0, sharey=ax0)
     ax3 = fig.add_subplot(gs[3])
     ax4 = fig.add_subplot(gs[4])
+    ax5 = fig.add_subplot(gs[5])
     axes = [ax0, ax1, ax2]
 
     fig.suptitle(
@@ -170,56 +190,76 @@ def plot_spot_projection(
 
     ax0.invert_yaxis()
 
-    # ── panel 3: n_removed per channel barplot ───────────────────────────────
+    # ── panel 3: removed per channel ────────────────────────────────────────
     if has_removed:
         ch_counts = (
             m_cell[m_cell["removed"]]
             .groupby("chan")
             .size()
-            .reindex([c for c in chan_order if c in m_cell["chan"].values], fill_value=0)
+            .reindex(chan_order, fill_value=0)
         )
-        bar_colors = [chan_colors.get(ch, "grey") for ch in ch_counts.index]
+        bar_colors_rem = [chan_colors.get(ch, "grey") for ch in chan_order]
         ax3.barh(
-            ch_counts.index, ch_counts.values,
-            color=bar_colors, edgecolor="white", linewidth=0.5, alpha=0.85,
+            chan_order, ch_counts.values,
+            color=bar_colors_rem, edgecolor="white", linewidth=0.5, alpha=0.85,
         )
+        max_rem = max(ch_counts.values) if max(ch_counts.values) > 0 else 1
         for y, val in enumerate(ch_counts.values):
-            ax3.text(
-                val + max(ch_counts.values) * 0.03, y,
-                str(int(val)), va="center", ha="left", fontsize=8,
-            )
-        ax3.set_xlim(0, max(ch_counts.values) * 1.25 or 1)
+            ax3.text(val + max_rem * 0.03, y, str(int(val)), va="center", ha="left", fontsize=8)
+        ax3.set_xlim(0, max_rem * 1.25)
         ax3.set_xlabel("n removed", fontsize=8)
-        ax3.set_title("Removed\nper channel", fontsize=9)
+        ax3.set_title("Removed\n(during unmixing)", fontsize=9)
         ax3.spines[["top", "right"]].set_visible(False)
     else:
         ax3.axis("off")
 
-    # ── panel 4: n_retained per channel barplot ──────────────────────────────
-    if has_removed:
-        ch_retained = (
-            m_cell[~m_cell["removed"]]
-            .groupby("chan")
-            .size()
-            .reindex([c for c in chan_order if c in m_cell["chan"].values], fill_value=0)
+    # ── panels 4+5: unmixed per chan+gene, all vs crosstalk-filtered ──────────
+    if has_gene:
+        u_labeled = u_cell.copy()
+        u_labeled["_label"] = (
+            u_labeled["unmixed_chan"].astype(str) + "  " + u_labeled["unmixed_gene"].astype(str)
         )
-        bar_colors_r = [chan_colors.get(ch, "grey") for ch in ch_retained.index]
-        ax4.barh(
-            ch_retained.index, ch_retained.values,
-            color=bar_colors_r, edgecolor="white", linewidth=0.5, alpha=0.85,
+        label_order = []
+        for ch in chan_order:
+            ch_labels = sorted(u_labeled.loc[u_labeled["unmixed_chan"] == ch, "_label"].unique())
+            if ch_labels:
+                label_order.extend(ch_labels)
+            else:
+                label_order.append(f"{ch}  —")  # placeholder for channels with no spots
+        bar_colors_u = [chan_colors.get(lbl.split("  ")[0].strip(), "grey") for lbl in label_order]
+        counts_all  = u_labeled.groupby("_label").size().reindex(label_order, fill_value=0)
+        counts_filt = (
+            u_labeled[u_labeled["crosstalk_score"] < crosstalk_threshold]
+            .groupby("_label").size().reindex(label_order, fill_value=0)
+            if has_crosstalk else counts_all
         )
-        max_ret = max(ch_retained.values) if max(ch_retained.values) > 0 else 1
-        for y, val in enumerate(ch_retained.values):
-            ax4.text(
-                val + max_ret * 0.03, y,
-                str(int(val)), va="center", ha="left", fontsize=8,
-            )
-        ax4.set_xlim(0, max_ret * 1.25)
-        ax4.set_xlabel("n retained", fontsize=8)
-        ax4.set_title("Retained\nper channel", fontsize=9)
-        ax4.spines[["top", "right"]].set_visible(False)
     else:
-        ax4.axis("off")
+        label_order = chan_order
+        bar_colors_u = [chan_colors.get(ch, "grey") for ch in chan_order]
+        counts_all = u_cell.groupby("unmixed_chan").size().reindex(chan_order, fill_value=0)
+        counts_filt = (
+            u_cell[u_cell["crosstalk_score"] < crosstalk_threshold]
+            .groupby("unmixed_chan").size().reindex(chan_order, fill_value=0)
+            if has_crosstalk else counts_all
+        )
+
+    for ax, counts, title, xlabel, hide_ylabels in [
+        (ax4, counts_all,  "Unmixed spots\n(pairwise)",                                     "n spots",            False),
+        (ax5, counts_filt, f"Post crosstalk filter\n(score < {crosstalk_threshold})",       "n spots (filtered)", True),
+    ]:
+        ax.barh(label_order, counts.values, color=bar_colors_u, edgecolor="white", linewidth=0.5, alpha=0.85)
+        max_val = max(counts.values) if max(counts.values) > 0 else 1
+        for y, val in enumerate(counts.values):
+            ax.text(val + max_val * 0.03, y, str(int(val)), va="center", ha="left", fontsize=8)
+        ax.set_xlim(0, max_val * 1.25)
+        ax.set_xlabel(xlabel, fontsize=8)
+        ax.set_title(title, fontsize=9)
+        ax.spines[["top", "right"]].set_visible(False)
+        if hide_ylabels:
+            ax.tick_params(labelleft=False)
+
+    if not has_crosstalk:
+        ax5.axis("off")
 
     if _standalone:
         plt.tight_layout()
@@ -365,6 +405,8 @@ def plot_cell_qc(
     nn_chan_col="unmixed_chan",
     scatter_pairs=None,
     scatter_axis_limits="equal",
+    dataset=None,
+    pyramid_level="0",
 ):
     """
     Combined single-cell QC figure.
@@ -413,34 +455,71 @@ def plot_cell_qc(
         scatter row is omitted.
     scatter_axis_limits : ``"auto"`` | ``"equal"``
         Axis limit mode forwarded to :func:`plot_adjacent_channel_scatter`.
+    dataset : HCRDataset, optional
+        When provided, an expression-image row for ``round_key`` is added
+        above the projection panel.
+    pyramid_level : str
+        Zarr pyramid level forwarded to
+        :func:`~aind_hcr_qc.viz.cells.plot_single_cell_expression_all_rounds`.
     """
+    _CROSSTALK_COLS = {"crosstalk_score", "d_assignment_ratio", "z_intensity_vs_removed"}
+    include_crosstalk = _CROSSTALK_COLS.issubset(u_cell.columns)
+
+    try:
+        _ctr = get_cell_centroid_from_spots(u_cell, cell_id)
+        _loc_str = f"  ·  x={_ctr['x_mean']} y={_ctr['y_mean']} z={_ctr['z_mean']}"
+    except Exception:
+        _loc_str = ""
+
     n_ch = len([c for c in chan_order if c in u_cell["unmixed_chan"].values])
     top_h = 5.0
     bot_h = max(2.5, n_ch * 0.75)
     include_nn = spots_df is not None
     include_scatter = scatter_pairs is not None
+    include_expr = dataset is not None
 
+    expr_h = 5.0
     n_scatter_pairs = len(scatter_pairs) if include_scatter else 4
     scatter_h = 8.0 if include_scatter else 0.0
+    crosstalk_h = 7.0
 
-    n_rows_fig = 2 + int(include_scatter)
-    height_ratios = [top_h, bot_h] + ([scatter_h] if include_scatter else [])
-    total_h = top_h + bot_h + scatter_h + 0.8
+    n_rows_fig = 2 + int(include_scatter) + int(include_expr) + int(include_crosstalk)
+    height_ratios = (
+        ([expr_h] if include_expr else [])
+        + [top_h, bot_h]
+        + ([scatter_h] if include_scatter else [])
+        + ([crosstalk_h] if include_crosstalk else [])
+    )
+    total_h = (expr_h if include_expr else 0.0) + top_h + bot_h + scatter_h + (crosstalk_h if include_crosstalk else 0.0) + 0.8
 
     fig = plt.figure(figsize=(26, total_h), constrained_layout=True)
+    fig.suptitle(
+        f"Cell {cell_id}{_loc_str}  —  Round {round_key}",
+        fontsize=16, fontweight="bold", y=1.02,
+    )
     sfigs = fig.subfigures(n_rows_fig, 1, height_ratios=height_ratios, hspace=0.04)
+
+    # sfigs index offset when the expression row is prepended
+    _off = int(include_expr)
+
+    if include_expr:
+        plot_single_cell_expression_all_rounds(
+            cell_id, dataset, pyramid_level, [round_key],
+            verbose=False,
+            subfig=sfigs[0],
+        )
 
     plot_spot_projection(
         m_cell, u_cell, cell_id, round_key,
         chan_order=chan_order, chan_colors=chan_colors,
         removed_style=removed_style,
-        subfig=sfigs[0],
+        subfig=sfigs[_off],
     )
 
     if include_nn:
         # split second row: measures on the left, NN distances on the right
         n_m = len(list(measures))
-        bot_sfigs = sfigs[1].subfigures(1, 2, width_ratios=[n_m, 2])
+        bot_sfigs = sfigs[_off + 1].subfigures(1, 2, width_ratios=[n_m, 2])
         plot_spot_measure_distributions(
             u_cell, measures=list(measures), thresholds=thresholds,
             chan_order=chan_order, chan_colors=chan_colors,
@@ -460,7 +539,7 @@ def plot_cell_qc(
         plot_spot_measure_distributions(
             u_cell, measures=list(measures), thresholds=thresholds,
             chan_order=chan_order, chan_colors=chan_colors,
-            subfig=sfigs[1],
+            subfig=sfigs[_off + 1],
         )
 
     if include_scatter:
@@ -469,7 +548,15 @@ def plot_cell_qc(
             chan_order=chan_order, chan_colors=chan_colors,
             pairs=scatter_pairs,
             axis_limits=scatter_axis_limits,
-            subfig=sfigs[2],
+            subfig=sfigs[_off + 2],
+        )
+
+    if include_crosstalk:
+        ct_idx = _off + 2 + int(include_scatter)
+        plot_crosstalk_scores_intensity(
+            u_cell, round_id=round_key, cell_id=cell_id,
+            chan_order=chan_order, chan_colors=chan_colors,
+            subfig=sfigs[ct_idx],
         )
 
     plt.show()

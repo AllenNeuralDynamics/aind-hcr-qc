@@ -20,7 +20,7 @@ import aind_hcr_qc.io.zarr_data as zarr_data
 @saveable_plot()
 def plot_single_cell_expression_all_rounds(
     plot_cell_id: int, dataset: HCRDataset, pyramid_level: str = "0", rounds: List[str] = None, vmin_vmax = "auto", verbose: bool = False,
-    linear_unmix_matrix=None
+    linear_unmix_matrix=None, subfig=None,
 ) -> plt.Figure:
     """
     Plot single cell expression across multiple HCR rounds in a compact vertical layout.
@@ -76,8 +76,12 @@ def plot_single_cell_expression_all_rounds(
     if not isinstance(rounds, list):
         raise ValueError("Rounds must be a list of round identifiers (e.g., ['R1', 'R2', ...])")
 
-    # Create a single parent figure
-    fig = plt.figure(figsize=(20, 5 * len(rounds)))
+    # Use provided subfig or create a new figure
+    _standalone = subfig is None
+    if _standalone:
+        fig = plt.figure(figsize=(20, 5 * len(rounds)))
+    else:
+        fig = subfig
 
     # Create a GridSpec layout
     gs = gridspec.GridSpec(
@@ -125,7 +129,8 @@ def plot_single_cell_expression_all_rounds(
     #     hspace=0.1  # Small height spacing
     # )
 
-    plt.tight_layout()
+    if _standalone:
+        plt.tight_layout()
     return fig
 
 
