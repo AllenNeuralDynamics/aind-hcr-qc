@@ -807,3 +807,230 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
 
 
 
+# ---
+# Exemplar cell selection
+
+# ── Focused exemplar sampler ──────────────────────────────────────────────────
+
+ADJACENT_PAIRS = [("488", "514"), ("514", "561"), ("561", "594"), ("594", "638")]
+
+
+def select_focused_exemplars(summary, chan_order=CHAN_ORDER,
+                             adjacent_pairs=ADJACENT_PAIRS, min_spots=50):
+    """
+    Pick one cell per channel (retained signal) and one per adjacent pair (pair loss).
+
+    Parameters
+    ----------
+    min_spots : int
+        Minimum total mixed spots in a cell to be eligible as an exemplar.
+
+    Returns
+    -------
+    retained : dict  {channel_str: cell_id}
+    pair_loss : dict {(ch_a, ch_b): cell_id}
+    """
+    chans_in_data = [ch for ch in chan_order
+                     if f"n_unmixed_{ch}" in summary.columns]
+
+    eligible = summary[summary["n_total"] >= min_spots]
+
+    # ── retained signal: most valid survivors, removal ≤ 20 % ────────────────
+    retained = {}
+    for ch in chans_in_data:
+        rcol = f"removal_rate_{ch}"
+        ucol = f"n_unmixed_{ch}"
+        if rcol not in eligible.columns or ucol not in eligible.columns:
+            continue
+        candidates = eligible[
+            (eligible[rcol].fillna(1) <= 0.20) & (eligible[ucol].fillna(0) > 0)
+        ]
+        if candidates.empty:
+            continue
+        best = candidates.loc[candidates[ucol].idxmax()]
+        retained[ch] = int(best["cell_id"])
+
+    # ── pair loss: highest combined removal, both ≥ 30 % ────────────────────
+    pair_loss = {}
+    for a, b in adjacent_pairs:
+        ra_col = f"removal_rate_{a}"
+        rb_col = f"removal_rate_{b}"
+        if ra_col not in eligible.columns or rb_col not in eligible.columns:
+            continue
+        candidates = eligible[
+            (eligible[ra_col].fillna(0) >= 0.30) &
+            (eligible[rb_col].fillna(0) >= 0.30)
+        ].copy()
+        if candidates.empty:
+            continue
+        candidates["_pair_loss"] = candidates[ra_col] + candidates[rb_col]
+        best = candidates.loc[candidates["_pair_loss"].idxmax()]
+        pair_loss[(a, b)] = int(best["cell_id"])
+
+    return retained, pair_loss
+
+
+def annotate_spots_with_valid(mixed_df, unmixed_df):
+    """
+    Like annotate_spots_df but 'removed' also includes valid_spot=False spots.
+    Returns (mixed_out, unmixed_out) with 'removed' / 'reassigned' columns.
+    """
+    unmixed_out = unmixed_df.copy()
+    if "unmixed_chan" in unmixed_out.columns:
+        unmixed_out["reassigned"] = unmixed_out["chan"] != unmixed_out["unmixed_chan"]
+    else:
+        unmixed_out["reassigned"] = False
+
+    mixed_out = mixed_df.copy()
+    round_col = next((c for c in ("round", "round_key") if c in mixed_df.columns), None)
+
+    # build survived set accounting for valid_spot
+    has_valid = "valid_spot" in unmixed_out.columns
+
+    if round_col is not None:
+        mixed_out["removed"] = True
+        for rnd, m_grp in mixed_out.groupby(round_col):
+            u_rnd = unmixed_out[unmixed_out[round_col] == rnd]
+            if has_valid:
+                survived = set(u_rnd.loc[u_rnd["valid_spot"] == True, "spot_uid"])
+            else:
+                survived = set(u_rnd["spot_uid"])
+            mixed_out.loc[m_grp.index, "removed"] = ~m_grp["spot_uid"].isin(survived)
+    else:
+        if has_valid:
+            survived = set(unmixed_out.loc[unmixed_out["valid_spot"] == True, "spot_uid"])
+        else:
+            survived = set(unmixed_out["spot_uid"])
+        mixed_out["removed"] = ~mixed_out["spot_uid"].isin(survived)
+
+    return mixed_out, unmixed_out
+
+
+def build_round_cell_summary(mixed_all, unmixed_all, round_key, chan_order=CHAN_ORDER):
+    """
+    For one round, build a per-cell summary of removal rates per channel.
+
+    Returns
+    -------
+    summary : DataFrame
+        One row per cell_id.  Columns include n_total, n_removed,
+        removal_rate_global, and per-channel n_mixed_{ch}, n_unmixed_{ch},
+        removal_rate_{ch}.
+    """
+    mx = mixed_all[mixed_all["round"] == round_key]
+    um = unmixed_all[unmixed_all["round"] == round_key]
+
+    # final survivors = present in unmixed AND valid_spot is True
+    # (captures both unmixing removal AND post-QC filtering)
+    if "valid_spot" in um.columns:
+        survived_uids = set(um.loc[um["valid_spot"] == True, "spot_uid"])
+    else:
+        survived_uids = set(um["spot_uid"])
+
+    chans_in_data = [c for c in chan_order if c in mx["chan"].values]
+
+    df = mx[["cell_id", "chan", "spot_uid"]].copy()
+    df["removed"] = ~df["spot_uid"].isin(survived_uids)
+
+    # ── global counts per cell ───────────────────────────────────────────────
+    summary = (
+        df.groupby("cell_id")["removed"]
+        .agg(n_total="count", n_removed="sum")
+        .reset_index()
+    )
+    summary["n_removed"] = summary["n_removed"].astype(int)
+    summary["removal_rate_global"] = summary["n_removed"] / summary["n_total"]
+
+    # ── per-channel counts via pivot ─────────────────────────────────────────
+    chan_agg = (
+        df[df["chan"].isin(chans_in_data)]
+        .groupby(["cell_id", "chan"])["removed"]
+        .agg(n_mixed="count", n_removed_ch="sum")
+        .reset_index()
+    )
+    chan_agg["n_unmixed"] = chan_agg["n_mixed"] - chan_agg["n_removed_ch"]
+    chan_agg["removal_rate"] = chan_agg["n_removed_ch"] / chan_agg["n_mixed"]
+
+    # pivot: removal rate per channel
+    rate_piv = chan_agg.pivot_table(
+        index="cell_id", columns="chan", values="removal_rate"
+    ).reset_index()
+    rate_piv.columns = ["cell_id"] + [
+        f"removal_rate_{c}" for c in rate_piv.columns[1:]
+    ]
+
+    # pivot: mixed counts per channel
+    nmixed_piv = chan_agg.pivot_table(
+        index="cell_id", columns="chan", values="n_mixed"
+    ).reset_index()
+    nmixed_piv.columns = ["cell_id"] + [
+        f"n_mixed_{c}" for c in nmixed_piv.columns[1:]
+    ]
+
+    # pivot: unmixed counts per channel
+    nunmixed_piv = chan_agg.pivot_table(
+        index="cell_id", columns="chan", values="n_unmixed"
+    ).reset_index()
+    nunmixed_piv.columns = ["cell_id"] + [
+        f"n_unmixed_{c}" for c in nunmixed_piv.columns[1:]
+    ]
+
+    summary = summary.merge(rate_piv, on="cell_id", how="left")
+    summary = summary.merge(nmixed_piv, on="cell_id", how="left")
+    summary = summary.merge(nunmixed_piv, on="cell_id", how="left")
+
+    # ── severity category ────────────────────────────────────────────────────
+    rate_cols = [f"removal_rate_{ch}" for ch in chans_in_data
+                 if f"removal_rate_{ch}" in summary.columns]
+    rates       = summary[rate_cols].to_numpy(dtype=float)
+    global_rate = summary["removal_rate_global"].to_numpy()
+    n_removed   = summary["n_removed"].to_numpy()
+    top1_thresh = np.nanquantile(n_removed, 0.99) if len(n_removed) else 0
+
+    max_rate          = np.nanmax(rates, axis=1)
+    n_below_20_or_nan = np.sum((rates < 0.20) | np.isnan(rates), axis=1)
+    n_chans           = rates.shape[1]
+    any_above_20      = np.any(rates >= 0.20, axis=1)
+    any_below_80      = np.any(rates < 0.80, axis=1)
+
+    summary["category"] = np.select(
+        [global_rate < 0.05,
+         n_removed >= top1_thresh,
+         (max_rate >= 0.80) & (n_below_20_or_nan >= n_chans - 1),
+         any_above_20 & any_below_80],
+        ["clean", "heavy_loss", "channel_specific_loss", "broad_loss"],
+        default="other",
+    )
+
+    # ── per-channel signal regime tags ───────────────────────────────────────
+    # median / p25 mixed counts per channel (across all cells in this round)
+    median_counts = {}
+    p25_counts = {}
+    for ch in chans_in_data:
+        col = f"n_mixed_{ch}"
+        if col in summary.columns:
+            vals = summary[col].dropna()
+            median_counts[ch] = vals.median() if len(vals) else 0
+            p25_counts[ch] = vals.quantile(0.25) if len(vals) else 0
+
+    for ch in chans_in_data:
+        rcol = f"removal_rate_{ch}"
+        ncol = f"n_mixed_{ch}"
+        tag_col = f"regime_{ch}"
+        if rcol not in summary.columns or ncol not in summary.columns:
+            continue
+        rate = summary[rcol].fillna(0).to_numpy()
+        count = summary[ncol].fillna(0).to_numpy()
+        med = median_counts.get(ch, 0)
+        p25 = p25_counts.get(ch, 0)
+
+        summary[tag_col] = np.select(
+            [(rate <= 0.20) & (count >= med),
+             (rate <= 0.20) & (count < p25) & (count > 0),
+             rate >= 0.50],
+            ["strong_survivor", "weak_survivor", "heavy_channel_loss"],
+            default="moderate",
+        )
+
+    summary["round"] = round_key
+    return summary
