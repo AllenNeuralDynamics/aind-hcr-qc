@@ -386,7 +386,7 @@ def plot_spot_measure_distributions(
         plt.tight_layout()
         plt.show()
 
-
+@saveable_plot()
 def plot_cell_qc(
     m_cell,
     u_cell,
@@ -559,7 +559,7 @@ def plot_cell_qc(
             subfig=sfigs[ct_idx],
         )
 
-    plt.show()
+    return fig
 
 
 
