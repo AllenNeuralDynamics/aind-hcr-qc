@@ -48,6 +48,9 @@ from .single_cell_unmixing import (
     plot_cell_qc,
     plot_spot_nn_distances,
     plot_adjacent_channel_scatter,
+    select_focused_exemplars,
+    annotate_spots_with_valid,
+    build_round_cell_summary,
 )
 
 __all__ = [
@@ -97,4 +100,7 @@ __all__ = [
     "plot_cell_qc",
     "plot_spot_nn_distances",
     "plot_adjacent_channel_scatter",
+    "select_focused_exemplars",
+    "annotate_spots_with_valid",
+    "build_round_cell_summary",
 ]

@@ -13,6 +13,7 @@ Three complementary views for one cell × one round:
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+from scipy.spatial import KDTree
 from aind_hcr_qc.utils.utils import saveable_plot
 from aind_hcr_qc.viz.cells import plot_single_cell_expression_all_rounds, get_cell_centroid_from_spots
 from aind_hcr_qc.viz.spot_detection import plot_crosstalk_scores_intensity
@@ -1033,4 +1034,262 @@ def build_round_cell_summary(mixed_all, unmixed_all, round_key, chan_order=CHAN_
         )
 
     summary["round"] = round_key
+
+
+# ── Nearest-neighbour distance helpers & plots ────────────────────────────────
+
+def _nn_dist_3d(spots_df, ch_a, ch_b, voxel_size, chan_col="chan", k=1):
+    """Full 3D Euclidean NN distance (µm) from ch_a to nearest ch_b spot."""
+    scale = np.array([voxel_size["x"], voxel_size["y"], voxel_size["z"]])
+    src = spots_df[spots_df[chan_col] == ch_a][["x", "y", "z"]].values.astype(float) * scale
+    tgt = spots_df[spots_df[chan_col] == ch_b][["x", "y", "z"]].values.astype(float) * scale
+    if len(src) < 2 or len(tgt) < k:
+        return None
+    dists, _ = KDTree(tgt).query(src, k=k, workers=-1)
+    return dists.ravel()
+
+
+def plot_nn_euclidean_dists(spots_df, pairs, chan_colors, cell_id, round_key,
+                            voxel_size, chan_col="chan"):
+    """1-row histogram: full 3D Euclidean NN distance (µm) per channel pair,
+    both directions, for a single cell."""
+    n_pairs = len(pairs)
+    fig, axes = plt.subplots(1, n_pairs, figsize=(3.5 * n_pairs, 3.5), sharey=True)
+    if n_pairs == 1:
+        axes = [axes]
+    fig.suptitle(
+        f"Cell {cell_id}  {round_key}  — 1-NN 3D Euclidean distance [µm]",
+        fontsize=12,
+    )
+
+    all_d = []
+    data = {}
+    for col, (ch_a, ch_b) in enumerate(pairs):
+        for src, tgt in [(ch_a, ch_b), (ch_b, ch_a)]:
+            d = _nn_dist_3d(spots_df, src, tgt, voxel_size, chan_col=chan_col)
+            data[(col, src, tgt)] = d
+            if d is not None:
+                all_d.append(d)
+
+    xlim = (0, float(np.percentile(np.concatenate(all_d), 99))) if all_d else (0, 5)
+
+    for col, (ch_a, ch_b) in enumerate(pairs):
+        ax = axes[col]
+        for (src, tgt), alpha in [((ch_a, ch_b), 0.75), ((ch_b, ch_a), 0.55)]:
+            d = data[(col, src, tgt)]
+            if d is None:
+                continue
+            ax.hist(d, bins=30, color=chan_colors.get(src, "grey"),
+                    alpha=alpha, label=f"{src}→{tgt} (n={len(d)})",
+                    density=False, range=xlim)
+        ax.set_title(f"{ch_a} / {ch_b}", fontsize=10)
+        ax.set_xlabel("3D dist (µm)")
+        ax.set_xlim(xlim)
+        ax.legend(fontsize=7, framealpha=0.4)
+        if col == 0:
+            ax.set_ylabel("Count")
+
+    fig.tight_layout()
+    plt.show()
+
+
+def _nn_distances_xy_z(spots_df, ch_a, ch_b, chan_col="chan", voxel_size=None, k=1):
+    """Return (xy_dists, z_dists) for ch_a -> nearest ch_b spot.
+    If voxel_size dict provided, distances are in µm."""
+    src = spots_df[spots_df[chan_col] == ch_a][["x", "y", "z"]].values.astype(float)
+    tgt = spots_df[spots_df[chan_col] == ch_b][["x", "y", "z"]].values.astype(float)
+    if len(src) < 2 or len(tgt) < k:
+        return None, None
+    if voxel_size is not None:
+        scale = np.array([voxel_size["x"], voxel_size["y"], voxel_size["z"]])
+        src = src * scale
+        tgt = tgt * scale
+    tree = KDTree(tgt)
+    dists, idx = tree.query(src, k=k, workers=-1)
+    nn_pts = tgt[idx.ravel()]
+    dxy = np.sqrt((src[:, 0] - nn_pts[:, 0])**2 + (src[:, 1] - nn_pts[:, 1])**2)
+    dz  = src[:, 2] - nn_pts[:, 2]   # signed Z offset
+    return dxy, dz
+
+
+def _plot_nn_grid(spots_df, pairs, chan_colors, cell_id, round_key,
+                 voxel_size=None, chan_col="chan",
+                 xlim_xy=None, xlim_z=None):
+    """2-row NN distance grid (XY + Z offset) for a single cell."""
+    unit = "µm" if voxel_size is not None else "px"
+    n_pairs = len(pairs)
+    fig, axes = plt.subplots(2, n_pairs, figsize=(3.5 * n_pairs, 6), sharey="row")
+    fig.suptitle(
+        f"Cell {cell_id}  {round_key}  — 1-NN cross-channel distances  [{unit}]",
+        fontsize=12,
+    )
+
+    all_dxy, all_dz = [], []
+    data = {}
+    for col, (ch_a, ch_b) in enumerate(pairs):
+        for src, tgt in [(ch_a, ch_b), (ch_b, ch_a)]:
+            dxy, dz = _nn_distances_xy_z(spots_df, src, tgt, chan_col=chan_col, voxel_size=voxel_size)
+            data[(col, src, tgt)] = (dxy, dz)
+            if dxy is not None:
+                all_dxy.append(dxy)
+                all_dz.append(dz)
+
+    if xlim_xy is None and all_dxy:
+        xlim_xy = (0, float(np.percentile(np.concatenate(all_dxy), 99)))
+    if xlim_z is None and all_dz:
+        p99 = float(np.percentile(np.abs(np.concatenate(all_dz)), 99))
+        xlim_z = (-p99, p99)
+
+    for col, (ch_a, ch_b) in enumerate(pairs):
+        ax_xy = axes[0, col]
+        ax_z  = axes[1, col]
+
+        for (src, tgt), alpha in [((ch_a, ch_b), 0.75), ((ch_b, ch_a), 0.55)]:
+            dxy, dz = data[(col, src, tgt)]
+            if dxy is None:
+                continue
+            color = chan_colors.get(src, "grey")
+            label = f"{src}→{tgt} (n={len(dxy)})"
+            ax_xy.hist(dxy, bins=30, color=color, alpha=alpha, label=label, density=False, range=xlim_xy)
+            ax_z.hist(dz,   bins=30, color=color, alpha=alpha, label=label, density=False, range=xlim_z)
+
+        ax_xy.set_title(f"{ch_a} / {ch_b}", fontsize=10)
+        ax_xy.set_xlabel(f"XY dist ({unit})")
+        ax_xy.set_xlim(xlim_xy)
+        ax_z.set_xlabel(f"Z offset ({unit})")
+        ax_z.set_xlim(xlim_z)
+        ax_z.axvline(0, color="k", lw=0.8, ls="--")
+        if col == 0:
+            ax_xy.set_ylabel("Count")
+            ax_z.set_ylabel("Count")
+        ax_xy.legend(fontsize=7, framealpha=0.4)
+        ax_z.legend(fontsize=7, framealpha=0.4)
+
+    fig.tight_layout()
+    plt.show()
+
+
+def collect_nn_dists_all_cells(spots_df, pairs, voxel_size, chan_col="chan"):
+    """
+    Compute per-cell NN distances (XY µm, Z µm, 3D µm) for every pair,
+    pooled across all cells in spots_df.
+
+    Returns
+    -------
+    dict : {(ch_a, ch_b, direction): {"dxy": array, "dz": array, "d3d": array}}
+        direction is ``"fwd"`` (a→b) or ``"rev"`` (b→a).
+    """
+    scale = np.array([voxel_size["x"], voxel_size["y"], voxel_size["z"]])
+    cell_ids = spots_df["cell_id"].unique()
+
+    pooled = {(ch_a, ch_b, d): {"dxy": [], "dz": [], "d3d": []}
+              for ch_a, ch_b in pairs
+              for d in ("fwd", "rev")}
+
+    for cid in cell_ids:
+        cell = spots_df[spots_df["cell_id"] == cid]
+        for ch_a, ch_b in pairs:
+            for (src, tgt), dirkey in [((ch_a, ch_b), "fwd"), ((ch_b, ch_a), "rev")]:
+                s = cell[cell[chan_col] == src][["x", "y", "z"]].values.astype(float) * scale
+                t = cell[cell[chan_col] == tgt][["x", "y", "z"]].values.astype(float) * scale
+                if len(s) < 2 or len(t) < 1:
+                    continue
+                _, idx = KDTree(t).query(s, k=1, workers=-1)
+                nn = t[idx.ravel()]
+                dxy = np.sqrt((s[:, 0] - nn[:, 0])**2 + (s[:, 1] - nn[:, 1])**2)
+                dz  = s[:, 2] - nn[:, 2]
+                d3d = np.sqrt(dxy**2 + dz**2)
+                key = (ch_a, ch_b, dirkey)
+                pooled[key]["dxy"].append(dxy)
+                pooled[key]["dz"].append(dz)
+                pooled[key]["d3d"].append(d3d)
+
+    return {k: {m: np.concatenate(v[m]) if v[m] else np.array([])
+                for m in ("dxy", "dz", "d3d")}
+            for k, v in pooled.items()}
+
+
+def plot_nn_grid_pooled(spots_df, pairs, chan_colors, label,
+                        voxel_size, chan_col="chan"):
+    """2-row NN distance grid (XY + Z offset) pooled across all cells in spots_df."""
+    pooled = collect_nn_dists_all_cells(spots_df, pairs, voxel_size, chan_col=chan_col)
+
+    n_pairs = len(pairs)
+    fig, axes = plt.subplots(2, n_pairs, figsize=(3.5 * n_pairs, 6), sharey="row")
+    fig.suptitle(f"{label}  — 1-NN cross-channel distances [µm]  "
+                 f"(n={spots_df['cell_id'].nunique()} cells pooled)", fontsize=12)
+
+    all_dxy = np.concatenate([v["dxy"] for v in pooled.values() if len(v["dxy"])])
+    all_dz  = np.concatenate([v["dz"]  for v in pooled.values() if len(v["dz"])])
+    xlim_xy = (0, float(np.percentile(all_dxy, 99))) if len(all_dxy) else (0, 5)
+    xlim_z  = (-5, 5)
+
+    for col, (ch_a, ch_b) in enumerate(pairs):
+        ax_xy = axes[0, col]
+        ax_z  = axes[1, col]
+
+        for src, tgt, dirkey, alpha in [(ch_a, ch_b, "fwd", 0.75),
+                                        (ch_b, ch_a, "rev", 0.55)]:
+            key = (ch_a, ch_b, dirkey)
+            dxy = pooled[key]["dxy"]
+            dz  = pooled[key]["dz"]
+            if not len(dxy):
+                continue
+            color = chan_colors.get(src, "grey")
+            lbl = f"{src}→{tgt} (n={len(dxy)})"
+            ax_xy.hist(dxy, bins=40, color=color, alpha=alpha, label=lbl,
+                       density=False, range=xlim_xy)
+            ax_z.hist(dz,  bins=40, color=color, alpha=alpha, label=lbl,
+                      density=False, range=xlim_z)
+
+        ax_xy.set_title(f"{ch_a} / {ch_b}", fontsize=10)
+        ax_xy.set_xlabel("XY dist (µm)")
+        ax_xy.set_xlim(xlim_xy)
+        ax_z.set_xlabel("Z offset (µm)")
+        ax_z.set_xlim(xlim_z)
+        ax_z.axvline(0, color="k", lw=0.8, ls="--")
+        if col == 0:
+            ax_xy.set_ylabel("Count")
+            ax_z.set_ylabel("Count")
+        ax_xy.legend(fontsize=7, framealpha=0.4)
+        ax_z.legend(fontsize=7, framealpha=0.4)
+
+    fig.tight_layout()
+    plt.show()
+
+
+def plot_nn_euclidean_dists_pooled(spots_df, pairs, chan_colors, label,
+                                   voxel_size, chan_col="chan"):
+    """1-row histogram of pooled 3D Euclidean NN distance (µm) per pair,
+    both directions."""
+    pooled = collect_nn_dists_all_cells(spots_df, pairs, voxel_size, chan_col=chan_col)
+
+    n_pairs = len(pairs)
+    fig, axes = plt.subplots(1, n_pairs, figsize=(3.5 * n_pairs, 3.5), sharey=True)
+    if n_pairs == 1:
+        axes = [axes]
+    fig.suptitle(f"{label}  — 1-NN 3D Euclidean distance [µm]  "
+                 f"(n={spots_df['cell_id'].nunique()} cells pooled)", fontsize=12)
+
+    xlim = (0, 8)
+
+    for col, (ch_a, ch_b) in enumerate(pairs):
+        ax = axes[col]
+        for src, tgt, dirkey, alpha in [(ch_a, ch_b, "fwd", 0.75),
+                                        (ch_b, ch_a, "rev", 0.55)]:
+            d = pooled[(ch_a, ch_b, dirkey)]["d3d"]
+            if not len(d):
+                continue
+            ax.hist(d, bins=40, color=chan_colors.get(src, "grey"),
+                    alpha=alpha, label=f"{src}→{tgt} (n={len(d)})",
+                    density=False, range=xlim)
+        ax.set_title(f"{ch_a} / {ch_b}", fontsize=10)
+        ax.set_xlabel("3D dist (µm)")
+        ax.set_xlim(xlim)
+        ax.legend(fontsize=7, framealpha=0.4)
+        if col == 0:
+            ax.set_ylabel("Count")
+
+    fig.tight_layout()
+    plt.show()
     return summary
