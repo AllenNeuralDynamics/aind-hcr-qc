@@ -12,6 +12,7 @@ Three complementary views for one cell × one round:
 
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
 from matplotlib.gridspec import GridSpec
 from scipy.spatial import KDTree
 from aind_hcr_qc.utils.utils import saveable_plot
@@ -377,6 +378,8 @@ def plot_spot_measure_distributions(
         ax.set_yticks(range(n_ch))
         ax.set_yticklabels([f"Ch {c}" for c in chans_present], fontsize=9)
         ax.set_xlabel(measure_labels.get(measure, measure), fontsize=9)
+        if measure == "dye_line_dist_ratio":
+            ax.set_xlim(0, 10)
         ax.set_ylim(-0.6, n_ch - 0.4)
         ax.spines[["top", "right"]].set_visible(False)
 
@@ -408,6 +411,7 @@ def plot_cell_qc(
     scatter_axis_limits="equal",
     dataset=None,
     pyramid_level="0",
+    crosstalk_plots = True,
 ):
     """
     Combined single-cell QC figure.
@@ -464,13 +468,14 @@ def plot_cell_qc(
         :func:`~aind_hcr_qc.viz.cells.plot_single_cell_expression_all_rounds`.
     """
     _CROSSTALK_COLS = {"crosstalk_score", "d_assignment_ratio", "z_intensity_vs_removed"}
-    include_crosstalk = _CROSSTALK_COLS.issubset(u_cell.columns)
+    crosstalk_plots = _CROSSTALK_COLS.issubset(u_cell.columns)
 
     try:
         _ctr = get_cell_centroid_from_spots(u_cell, cell_id)
         _loc_str = f"  ·  x={_ctr['x_mean']} y={_ctr['y_mean']} z={_ctr['z_mean']}"
     except Exception:
         _loc_str = ""
+    mouse_id = dataset.mouse_id
 
     n_ch = len([c for c in chan_order if c in u_cell["unmixed_chan"].values])
     top_h = 5.0
@@ -484,18 +489,18 @@ def plot_cell_qc(
     scatter_h = 8.0 if include_scatter else 0.0
     crosstalk_h = 7.0
 
-    n_rows_fig = 2 + int(include_scatter) + int(include_expr) + int(include_crosstalk)
+    n_rows_fig = 2 + int(include_scatter) + int(include_expr) + int(crosstalk_plots)
     height_ratios = (
         ([expr_h] if include_expr else [])
         + [top_h, bot_h]
         + ([scatter_h] if include_scatter else [])
-        + ([crosstalk_h] if include_crosstalk else [])
+        + ([crosstalk_h] if crosstalk_plots else [])
     )
-    total_h = (expr_h if include_expr else 0.0) + top_h + bot_h + scatter_h + (crosstalk_h if include_crosstalk else 0.0) + 0.8
+    total_h = (expr_h if include_expr else 0.0) + top_h + bot_h + scatter_h + (crosstalk_h if crosstalk_plots else 0.0) + 0.8
 
     fig = plt.figure(figsize=(26, total_h), constrained_layout=True)
     fig.suptitle(
-        f"Cell {cell_id}{_loc_str}  —  Round {round_key}",
+        f"Cell {cell_id}{_loc_str}  —  Round {round_key} - Mouse {mouse_id}",
         fontsize=16, fontweight="bold", y=1.02,
     )
     sfigs = fig.subfigures(n_rows_fig, 1, height_ratios=height_ratios, hspace=0.04)
@@ -549,10 +554,11 @@ def plot_cell_qc(
             chan_order=chan_order, chan_colors=chan_colors,
             pairs=scatter_pairs,
             axis_limits=scatter_axis_limits,
+            dataset=dataset,
             subfig=sfigs[_off + 2],
         )
 
-    if include_crosstalk:
+    if crosstalk_plots:
         ct_idx = _off + 2 + int(include_scatter)
         plot_crosstalk_scores_intensity(
             u_cell, round_id=round_key, cell_id=cell_id,
@@ -679,7 +685,7 @@ def plot_spot_nn_distances(spots_df, cell_id, round_key,
     ax.set_yticklabels([r[0] for r in rows], fontsize=8)
     ax.set_xlabel(f"{k}-NN distance to paired channel  ({dist_unit})", fontsize=9)
     ax.set_ylim(-0.6, n_rows - 0.4)
-    ax.set_xlim([0,4])
+    ax.set_xlim([0,10])
     ax.spines[["top", "right"]].set_visible(False)
     ax.set_title(f"Source → target  ({k}-NN in the other channel)", fontsize=9)
 
@@ -714,6 +720,9 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
                                    chan_order=CHAN_ORDER, chan_colors=CHAN_COLORS,
                                    pairs=None,
                                    axis_limits="equal",
+                                   ratios_matrix=None,
+                                   dataset=None,
+                                   plot_dye_lines=True,
                                    subfig=None):
     """
     Pairwise scatter of channel intensities, before vs after unmixing.
@@ -727,10 +736,94 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
         "auto"  — each subplot uses its own independent axis limits.
         "equal" — all subplots share the same x and y limits (union of all data
                   ranges), making cross-panel comparisons accurate.
+    ratios_matrix : np.ndarray or pd.DataFrame, optional
+        Mixing matrix used to draw dye-line directions. Expected orientation is
+        rows = dye/source channel, columns = measured channel. If None, the
+        function tries to load it from ``dataset.rounds[round_key]``.
+    dataset : HCRDataset, optional
+        Dataset object used to load per-round ratios matrix when
+        ``ratios_matrix`` is not provided.
+    plot_dye_lines : bool
+        If True, overlay dye-line directions for each plotted pair.
     subfig : matplotlib.figure.SubFigure, optional
         If provided, draw into this subfigure instead of creating a new figure.
         The caller is responsible for calling ``plt.show()``.
     """
+    def _unit_columns(matrix):
+        m = np.asarray(matrix, dtype=float)
+        col_norms = np.linalg.norm(m, axis=0) + 1e-12
+        return m / col_norms
+
+    def _to_numpy_matrix(matrix):
+        if matrix is None:
+            return None
+        if hasattr(matrix, "values"):
+            matrix = matrix.values
+        arr = np.asarray(matrix, dtype=float)
+        if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+            return None
+        return arr
+
+    def _load_ratios_from_dataset(ds, rk):
+        if ds is None:
+            return None
+        try:
+            round_obj = ds.rounds[rk]
+        except Exception:
+            return None
+
+        # Preferred API for pairwise assets.
+        try:
+            if hasattr(round_obj, "load_ratios_matrix"):
+                arr = _to_numpy_matrix(round_obj.load_ratios_matrix())
+                return arr if arr is not None else None
+        except Exception:
+            pass
+
+        # Fallback API for standard rounds.
+        try:
+            ratios_file = Path(round_obj.spot_files.ratios_file)
+            if ratios_file.exists():
+                arr = _to_numpy_matrix(np.loadtxt(ratios_file))
+                return arr if arr is not None else None
+        except Exception:
+            pass
+        return None
+
+    def _draw_pair_dye_lines(ax, ch_a, ch_b, matrix, channel_names, color_map):
+        if matrix is None:
+            return
+        try:
+            i = list(map(str, channel_names)).index(str(ch_a))  # x-axis index
+            j = list(map(str, channel_names)).index(str(ch_b))  # y-axis index
+        except ValueError:
+            return
+
+        # Use row-wise channel vectors as dye directions (rows=source, cols=measured).
+        u = _unit_columns(matrix.T)
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        lx = max(abs(xlim[0]), abs(xlim[1]))
+        ly = max(abs(ylim[0]), abs(ylim[1]))
+        l = max(lx, ly, 1e-9)
+
+        for dye_chan in (str(ch_a), str(ch_b)):
+            try:
+                d = list(map(str, channel_names)).index(dye_chan)
+            except ValueError:
+                continue
+            v = u[:, d]
+            v2 = np.array([v[i], v[j]], dtype=float)
+            norm2 = np.linalg.norm(v2) + 1e-12
+            p = (l / norm2) * v2
+            line_color = color_map.get(dye_chan, "black")
+            ax.plot([0, p[0]], [0, p[1]], linewidth=1.8, color=line_color, alpha=0.9, zorder=6)
+            ax.text(p[0] * 1.04, p[1] * 1.04, dye_chan, color=line_color, fontsize=7, zorder=7)
+
+    ratios_arr = _to_numpy_matrix(ratios_matrix)
+    if ratios_arr is None and plot_dye_lines:
+        ratios_arr = _load_ratios_from_dataset(dataset, round_key)
+
     if pairs is None:
         pairs = [(chan_order[i], chan_order[i + 1]) for i in range(len(chan_order) - 1)]
 
@@ -801,6 +894,20 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
             for ax in axes.flat:
                 ax.set_xlim(xmin - xpad, xmax + xpad)
                 ax.set_ylim(ymin - ypad, ymax + ypad)
+
+    # Overlay dye lines after axis limits are finalized.
+    if plot_dye_lines and ratios_arr is not None:
+        channel_names = [str(c) for c in chan_order]
+        for col_idx, (ch_a, ch_b) in enumerate(pairs):
+            for row_idx in range(2):
+                _draw_pair_dye_lines(
+                    axes[row_idx, col_idx],
+                    ch_a,
+                    ch_b,
+                    ratios_arr,
+                    channel_names,
+                    chan_colors,
+                )
 
     if _standalone:
         plt.tight_layout()

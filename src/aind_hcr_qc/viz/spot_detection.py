@@ -358,6 +358,9 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
     n_ch  = len(chans)
     score_p95 = np.nanpercentile(scored_df["crosstalk_score"].dropna(), 95)
     THRESHOLD = 1.0
+    TOP_XLIM = (-2, 20)   # z_intensity_vs_removed
+    TOP_YLIM = (-2, 30)   # d_assignment_ratio
+    BOT_XLIM = (-1, 20)   # crosstalk_score histogram
     title = (f"Cell {cell_id}  Round {round_id} — " if cell_id else f"Round {round_id} — ")
 
     if subfig is None:
@@ -395,6 +398,8 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
         fig.colorbar(sc, ax=ax0, shrink=0.75, pad=0.02, label="score")
         ax0.axhline(THRESHOLD, color="black", lw=0.9, ls="--", alpha=0.6)
         ax0.axvline(0,         color="black", lw=0.9, ls="--", alpha=0.6)
+        ax0.set_xlim(TOP_XLIM)
+        ax0.set_ylim(TOP_YLIM)
         xlim = ax0.get_xlim(); ylim = ax0.get_ylim()
         from matplotlib.patches import Rectangle as Rect
         ax0.add_patch(Rect(
@@ -415,8 +420,7 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
 
         ax1    = axes[1][ci]
         scores = sub["crosstalk_score"].dropna()
-        hi_bin = np.nanpercentile(scores, 99)
-        bins   = np.linspace(0, hi_bin, 40)
+        bins   = np.linspace(BOT_XLIM[0], BOT_XLIM[1], 40)
         clean   = scores[scores <= THRESHOLD]
         suspect = scores[scores >  THRESHOLD]
         ax1.hist(clean,   bins=bins, alpha=0.6, color=color,
@@ -424,6 +428,7 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
         ax1.hist(suspect, bins=bins, alpha=0.8, color="#d73027",
                  label=f"score > {THRESHOLD}  (n={len(suspect)})")
         ax1.axvline(THRESHOLD, color="black", lw=1.0, ls="--")
+        ax1.set_xlim(BOT_XLIM)
         ax1.set_xlabel("crosstalk_score", fontsize=7)
         if ci == 0:
             ax1.set_ylabel("count", fontsize=7)
