@@ -6,6 +6,13 @@ import seaborn as sns
 import numpy as np
 
 from aind_hcr_qc.utils.utils import saveable_plot
+
+PLOT_FONT_MULTIPLIER = 1.15 # good smallish = 1.08
+
+
+def _fs(size):
+    """Scale a base font size by a global multiplier."""
+    return max(1, size * PLOT_FONT_MULTIPLIER)
 # --
 # Utils
 # ---
@@ -371,7 +378,7 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
         axes = subfig.subplots(2, n_ch, squeeze=False)
         _standalone = False
     fig.suptitle(title + "Crosstalk score  (intensity z-score vs removed)",
-                 fontsize=11, y=1.02)
+                 fontsize=_fs(14), y=1.02)
 
     for ci, ch in enumerate(chans):
         sub = scored_df[scored_df["unmixed_chan"] == ch].dropna(
@@ -394,7 +401,7 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
                 marker="*", s=30, color="royalblue", zorder=5,
                 label=f"z-vetoed (n={len(sub_vetoed)})",
             )
-            ax0.legend(fontsize=6, loc="upper right")
+            ax0.legend(fontsize=_fs(9), loc="upper right")
         fig.colorbar(sc, ax=ax0, shrink=0.75, pad=0.02, label="score")
         ax0.axhline(THRESHOLD, color="black", lw=0.9, ls="--", alpha=0.6)
         ax0.axvline(0,         color="black", lw=0.9, ls="--", alpha=0.6)
@@ -409,13 +416,13 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
         ))
         n_veto = len(sub_vetoed)
         veto_str = f"  [{n_veto} vetoed]"
-        ax0.set_title(f"Ch {ch}  (n={n}){veto_str if n_veto else ''}", fontsize=9, color=color, fontweight="bold")
-        ax0.set_xlabel("z_intensity_vs_removed\n(← dimmer than removed  |  brighter →)", fontsize=7)
+        ax0.set_title(f"Ch {ch}  (n={n}){veto_str if n_veto else ''}", fontsize=_fs(12), color=color, fontweight="bold")
+        ax0.set_xlabel("z_intensity_vs_removed\n(← dimmer than removed  |  brighter →)", fontsize=_fs(10))
         if ci == 0:
-            ax0.set_ylabel("d_assignment_ratio\n(↑ worse spectral purity)", fontsize=7)
+            ax0.set_ylabel("d_assignment_ratio\n(↑ worse spectral purity)", fontsize=_fs(10))
         else:
             ax0.set_yticklabels([])
-        ax0.tick_params(labelsize=6)
+        ax0.tick_params(labelsize=_fs(9))
         ax0.spines[["top", "right"]].set_visible(False)
 
         ax1    = axes[1][ci]
@@ -429,13 +436,13 @@ def plot_crosstalk_scores_intensity(scored_df, round_id, cell_id=None,
                  label=f"score > {THRESHOLD}  (n={len(suspect)})")
         ax1.axvline(THRESHOLD, color="black", lw=1.0, ls="--")
         ax1.set_xlim(BOT_XLIM)
-        ax1.set_xlabel("crosstalk_score", fontsize=7)
+        ax1.set_xlabel("crosstalk_score", fontsize=_fs(10))
         if ci == 0:
-            ax1.set_ylabel("count", fontsize=7)
+            ax1.set_ylabel("count", fontsize=_fs(10))
         else:
             ax1.set_yticklabels([])
-        ax1.legend(fontsize=6, framealpha=0.8)
-        ax1.tick_params(labelsize=6)
+        ax1.legend(fontsize=_fs(9), framealpha=0.8)
+        ax1.tick_params(labelsize=_fs(9))
         ax1.spines[["top", "right"]].set_visible(False)
 
     plt.tight_layout() if _standalone else None

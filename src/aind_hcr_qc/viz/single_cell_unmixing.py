@@ -23,6 +23,12 @@ from aind_hcr_qc.constants import Z1_CHANNEL_CMAP_VIBRANT
 
 CHAN_ORDER = ["488", "514", "561", "594", "638"]
 CHAN_COLORS = {k: v for k, v in Z1_CHANNEL_CMAP_VIBRANT.items() if k in CHAN_ORDER}
+PLOT_FONT_MULTIPLIER = 1.15
+
+
+def _fs(size):
+    """Scale a base font size by a global multiplier."""
+    return max(1, size * PLOT_FONT_MULTIPLIER)
 
 
 @saveable_plot()
@@ -98,7 +104,7 @@ def plot_spot_projection(
 
     fig.suptitle(
         f"Cell {cell_id}  Round {round_key} — 3-D spots projected to XY",
-        fontsize=12,
+        fontsize=_fs(15),
     )
 
     # ── panel 0: before unmixing ─────────────────────────────────────────────
@@ -171,7 +177,7 @@ def plot_spot_projection(
             axes[2].text(
                 0.5, 0.5, "no removed spots",
                 transform=axes[2].transAxes,
-                ha="center", va="center", fontsize=9, color="grey",
+                ha="center", va="center", fontsize=_fs(11), color="grey",
             )
 
     # ── titles, labels, legends ──────────────────────────────────────────────
@@ -181,14 +187,16 @@ def plot_spot_projection(
         f"Removed spots only  (n={m_cell['removed'].sum() if has_removed else 0})",
     ]
     for i, (ax, title) in enumerate(zip(axes, titles)):
-        ax.set_title(title, fontsize=9)
-        ax.set_xlabel("x (pixels)")
+        ax.set_title(title, fontsize=_fs(12))
+        ax.set_xlabel("x (pixels)", fontsize=_fs(11))
         ax.set_aspect("equal")
         if i == 0:
-            ax.set_ylabel("y (pixels)")
-            ax.legend(loc="upper left", fontsize=8, framealpha=0.7)
+            ax.set_ylabel("y (pixels)", fontsize=_fs(11))
+            ax.legend(loc="upper left", fontsize=_fs(10), framealpha=0.7)
         else:
-            ax.tick_params(labelleft=False)
+            ax.tick_params(labelleft=False, labelsize=_fs(10))
+        if i == 0:
+            ax.tick_params(labelsize=_fs(10))
 
     ax0.invert_yaxis()
 
@@ -200,17 +208,31 @@ def plot_spot_projection(
             .size()
             .reindex(chan_order, fill_value=0)
         )
+
+        # Show channel + gene labels on the left panel when gene labels exist.
+        if has_gene:
+            removed_labels = []
+            for ch in chan_order:
+                genes = sorted(u_cell.loc[u_cell["unmixed_chan"] == ch, "unmixed_gene"].dropna().astype(str).unique())
+                if genes:
+                    removed_labels.append(f"{ch}  {genes[0]}")
+                else:
+                    removed_labels.append(f"{ch}  —")
+        else:
+            removed_labels = chan_order
+
         bar_colors_rem = [chan_colors.get(ch, "grey") for ch in chan_order]
         ax3.barh(
-            chan_order, ch_counts.values,
+            removed_labels, ch_counts.values,
             color=bar_colors_rem, edgecolor="white", linewidth=0.5, alpha=0.85,
         )
         max_rem = max(ch_counts.values) if max(ch_counts.values) > 0 else 1
         for y, val in enumerate(ch_counts.values):
-            ax3.text(val + max_rem * 0.03, y, str(int(val)), va="center", ha="left", fontsize=8)
+            ax3.text(val + max_rem * 0.03, y, str(int(val)), va="center", ha="left", fontsize=_fs(10))
         ax3.set_xlim(0, max_rem * 1.25)
-        ax3.set_xlabel("n removed", fontsize=8)
-        ax3.set_title("Removed\n(during unmixing)", fontsize=9)
+        ax3.set_xlabel("n removed", fontsize=_fs(11))
+        ax3.set_title("Removed (during unmixing)", fontsize=_fs(12))
+        ax3.tick_params(labelsize=_fs(10))
         ax3.spines[["top", "right"]].set_visible(False)
     else:
         ax3.axis("off")
@@ -246,16 +268,17 @@ def plot_spot_projection(
         )
 
     for ax, counts, title, xlabel, hide_ylabels in [
-        (ax4, counts_all,  "Unmixed spots\n(pairwise)",                                     "n spots",            False),
-        (ax5, counts_filt, f"Post crosstalk filter\n(score < {crosstalk_threshold})",       "n spots (filtered)", True),
+        (ax4, counts_all,  "Post Unmixing",                                     "n spots",            True),
+        (ax5, counts_filt, f"Post QC filtered",       "n spots (filtered)", True),
     ]:
         ax.barh(label_order, counts.values, color=bar_colors_u, edgecolor="white", linewidth=0.5, alpha=0.85)
         max_val = max(counts.values) if max(counts.values) > 0 else 1
         for y, val in enumerate(counts.values):
-            ax.text(val + max_val * 0.03, y, str(int(val)), va="center", ha="left", fontsize=8)
+            ax.text(val + max_val * 0.03, y, str(int(val)), va="center", ha="left", fontsize=_fs(10))
         ax.set_xlim(0, max_val * 1.25)
-        ax.set_xlabel(xlabel, fontsize=8)
-        ax.set_title(title, fontsize=9)
+        ax.set_xlabel(xlabel, fontsize=_fs(11))
+        ax.set_title(title, fontsize=_fs(12))
+        ax.tick_params(labelsize=_fs(10))
         ax.spines[["top", "right"]].set_visible(False)
         if hide_ylabels:
             ax.tick_params(labelleft=False)
@@ -333,7 +356,7 @@ def plot_spot_measure_distributions(
 
     fig.suptitle(
         "Per-spot quality measures after unmixing",
-        fontsize=11, y=1.02,
+        fontsize=_fs(14), y=1.02,
     )
 
     rng = np.random.default_rng(42)
@@ -376,11 +399,12 @@ def plot_spot_measure_distributions(
             )
 
         ax.set_yticks(range(n_ch))
-        ax.set_yticklabels([f"Ch {c}" for c in chans_present], fontsize=9)
-        ax.set_xlabel(measure_labels.get(measure, measure), fontsize=9)
+        ax.set_yticklabels([f"Ch {c}" for c in chans_present], fontsize=_fs(11))
+        ax.set_xlabel(measure_labels.get(measure, measure), fontsize=_fs(11))
         if measure == "dye_line_dist_ratio":
             ax.set_xlim(0, 10)
         ax.set_ylim(-0.6, n_ch - 0.4)
+        ax.tick_params(labelsize=_fs(10))
         ax.spines[["top", "right"]].set_visible(False)
 
         if col > 0:
@@ -501,7 +525,7 @@ def plot_cell_qc(
     fig = plt.figure(figsize=(26, total_h), constrained_layout=True)
     fig.suptitle(
         f"Cell {cell_id}{_loc_str}  —  Round {round_key} - Mouse {mouse_id}",
-        fontsize=16, fontweight="bold", y=1.02,
+        fontsize=_fs(18), fontweight="bold", y=1.02,
     )
     sfigs = fig.subfigures(n_rows_fig, 1, height_ratios=height_ratios, hspace=0.04)
 
@@ -661,7 +685,7 @@ def plot_spot_nn_distances(spots_df, cell_id, round_key,
     fig.suptitle(
         f"Cell {cell_id}  Round {round_key} — {k}-NN cross-channel distance\n"
         f"{title_suffix}",
-        fontsize=11,
+        fontsize=_fs(14),
     )
 
     rng = np.random.default_rng(42)
@@ -682,12 +706,13 @@ def plot_spot_nn_distances(spots_df, cell_id, round_key,
         ax.scatter(vals, yi + jitter, c=color, s=18, alpha=0.4, linewidths=0, zorder=3)
 
     ax.set_yticks(range(n_rows))
-    ax.set_yticklabels([r[0] for r in rows], fontsize=8)
-    ax.set_xlabel(f"{k}-NN distance to paired channel  ({dist_unit})", fontsize=9)
+    ax.set_yticklabels([r[0] for r in rows], fontsize=_fs(10))
+    ax.set_xlabel(f"{k}-NN distance to paired channel  ({dist_unit})", fontsize=_fs(11))
     ax.set_ylim(-0.6, n_rows - 0.4)
     ax.set_xlim([0,10])
+    ax.tick_params(labelsize=_fs(10))
     ax.spines[["top", "right"]].set_visible(False)
-    ax.set_title(f"Source → target  ({k}-NN in the other channel)", fontsize=9)
+    ax.set_title(f"Source → target  ({k}-NN in the other channel)", fontsize=_fs(12))
 
     # ── Panel 1: overlaid CDFs ────────────────────────────────────────────────
     ax2 = axes[1]
@@ -696,10 +721,11 @@ def plot_spot_nn_distances(spots_df, cell_id, round_key,
         cdf = np.arange(1, len(sorted_v) + 1) / len(sorted_v)
         ax2.plot(sorted_v, cdf, color=color, lw=1.8, label=f"{label}  (n={len(vals)})")
 
-    ax2.set_xlabel(f"{k}-NN distance  ({dist_unit})", fontsize=9)
-    ax2.set_ylabel("Cumulative fraction", fontsize=9)
-    ax2.set_title("CDF per direction", fontsize=9)
-    ax2.legend(fontsize=7, framealpha=0.8)
+    ax2.set_xlabel(f"{k}-NN distance  ({dist_unit})", fontsize=_fs(11))
+    ax2.set_ylabel("Cumulative fraction", fontsize=_fs(11))
+    ax2.set_title("CDF per direction", fontsize=_fs(12))
+    ax2.legend(fontsize=_fs(9), framealpha=0.8)
+    ax2.tick_params(labelsize=_fs(10))
     ax2.spines[["top", "right"]].set_visible(False)
 
     if _standalone:
@@ -818,7 +844,7 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
             p = (l / norm2) * v2
             line_color = color_map.get(dye_chan, "black")
             ax.plot([0, p[0]], [0, p[1]], linewidth=1.8, color=line_color, alpha=0.9, zorder=6)
-            ax.text(p[0] * 1.04, p[1] * 1.04, dye_chan, color=line_color, fontsize=7, zorder=7)
+            ax.text(p[0] * 1.04, p[1] * 1.04, dye_chan, color=line_color, fontsize=_fs(10), zorder=7)
 
     ratios_arr = _to_numpy_matrix(ratios_matrix)
     if ratios_arr is None and plot_dye_lines:
@@ -840,7 +866,7 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
         axes = axes[:, np.newaxis]
 
     fig.suptitle(f"Cell {cell_id}  Round {round_key} — Channel intensity scatter",
-                 fontsize=12)
+                 fontsize=_fs(15))
 
     for col_idx, (ch_a, ch_b) in enumerate(pairs):
         col_a = f"chan_{ch_a}_intensity"
@@ -848,7 +874,7 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
         if col_a not in m_cell.columns or col_b not in m_cell.columns:
             for row_idx in range(2):
                 axes[row_idx, col_idx].axis("off")
-                axes[row_idx, col_idx].set_title(f"Ch {ch_a} vs Ch {ch_b}\n(data missing)", fontsize=9)
+                axes[row_idx, col_idx].set_title(f"Ch {ch_a} vs Ch {ch_b}\n(data missing)", fontsize=_fs(12))
             continue
 
         for row_idx, (df, chan_col) in enumerate([
@@ -868,13 +894,14 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
                            c="lightgrey", s=8, alpha=0.5, linewidths=0, label="other")
 
             if row_idx == 0:
-                ax.set_title(f"Ch {ch_a} vs Ch {ch_b}", fontsize=9)
-            ax.set_xlabel(f"Ch {ch_a} intensity", fontsize=8)
-            ax.set_ylabel(f"Ch {ch_b} intensity", fontsize=8)
-            ax.legend(loc="upper right", fontsize=7, markerscale=1.5, framealpha=0.6)
+                ax.set_title(f"Ch {ch_a} vs Ch {ch_b}", fontsize=_fs(12))
+            ax.set_xlabel(f"Ch {ch_a} intensity", fontsize=_fs(11))
+            ax.set_ylabel(f"Ch {ch_b} intensity", fontsize=_fs(11))
+            ax.tick_params(labelsize=_fs(10))
+            ax.legend(loc="upper right", fontsize=_fs(9), markerscale=1.5, framealpha=0.6)
 
     for row_idx, label in enumerate(["Before unmixing", "After unmixing"]):
-        axes[row_idx, 0].set_ylabel(f"{label}\nCh {pairs[0][1]} intensity", fontsize=8)
+        axes[row_idx, 0].set_ylabel(f"{label}\nCh {pairs[0][1]} intensity", fontsize=_fs(11))
 
     # ── shared axis limits across all panels ─────────────────────────────────
     if axis_limits == "equal":
@@ -892,6 +919,12 @@ def plot_adjacent_channel_scatter(m_cell, u_cell, cell_id, round_key,
             xpad = (xmax - xmin) * pad
             ypad = (ymax - ymin) * pad
             for ax in axes.flat:
+                #ax.set_xlim(xmin - xpad, xmax + xpad)
+                #ax.set_ylim(ymin - ypad, ymax + ypad)
+                xmin = 0,
+                xmax = 2000
+                ymin = 0
+                ymax = 2000
                 ax.set_xlim(xmin - xpad, xmax + xpad)
                 ax.set_ylim(ymin - ypad, ymax + ypad)
 
