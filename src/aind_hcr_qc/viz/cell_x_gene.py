@@ -635,7 +635,395 @@ def plot_cell_x_gene_clustered(
     return fig, cluster_labels, sorted_cell_ids
 
 
+@saveable_plot()
+def plot_cell_x_gene_labeled(
+    cxg,
+    labels,
+    clip_range=(0, 50),
+    fig_size=(4, 6),
+    add_cluster_labels=True,
+    label_fontsize=7,
+    cbar_label="Transcript count",
+    title=None,
+    ax=None,
+    gene_sort='alphabetical',
+    dataset=None,
+    gene_label='gene',
+):
+    """
+    Plot a cell × gene heatmap sorted and grouped by pre-computed cluster labels.
+
+    Unlike :func:`plot_cell_x_gene_clustered`, this function skips clustering
+    entirely and uses caller-supplied labels (e.g. ``adata.obs['cluster']``) to
+    group cells.  Cells are ordered by label using a natural sort so that numeric
+    suffixes sort numerically (e.g. ``Inh 1`` before ``Inh 10``).
+
+    Parameters
+    ----------
+    cxg : pd.DataFrame
+        Cell × gene matrix with genes as columns and cells as rows.
+    labels : pd.Series
+        Cluster (or subclass) labels indexed by cell ID.  Must share index
+        values with ``cxg``.  Example: ``adata_log_inh.obs['cluster']``.
+    clip_range : tuple
+        ``(min, max)`` values to clip the matrix before plotting.
+    fig_size : tuple
+        ``(width, height)`` in inches.
+    add_cluster_labels : bool
+        Whether to draw green dashed boundary lines and label each cluster
+        on the left margin.  Default ``True``.  With many clusters (e.g. 62)
+        consider setting ``label_fontsize`` to a small value (6–7).
+    label_fontsize : int
+        Font size for cluster labels.  Default ``7``.
+    cbar_label : str
+        Colorbar label.  Default ``"Transcript count"``.
+    title : str, optional
+        Plot title.
+    ax : matplotlib axis, optional
+        Axis to plot on.  A new figure is created when ``None``.
+    gene_sort : str, optional
+        How to sort gene columns.  Options: ``'alphabetical'`` (default),
+        ``'round_channel'`` (requires *dataset*).
+    dataset : HCRDataset, optional
+        Required when ``gene_sort='round_channel'``.
+    gene_label : str, optional
+        X-axis tick label style — ``'gene'`` (default) or
+        ``'round_channel_gene'``.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    sorted_labels : np.ndarray
+        Label array in the same row order as the plot.
+    sorted_cell_ids : pd.Index
+        Cell IDs in the same row order as the plot.
+    """
+    import re as _re
+
+    if not isinstance(cxg, pd.DataFrame):
+        raise ValueError("Input cxg must be a pandas DataFrame.")
+
+    cxg = cxg.copy()
+    cxg = cxg.fillna(0)
+    cxg = cxg.astype(int)
+    cxg = cxg.clip(lower=clip_range[0], upper=clip_range[1])
+
+    # Align labels with cxg rows
+    labels = labels.reindex(cxg.index)
+
+    # Natural sort: "Inh 2" < "Inh 10", pure alphabetical otherwise
+    def _natural_key(s):
+        return [int(t) if t.isdigit() else t.lower() for t in _re.split(r'(\d+)', str(s))]
+
+    sorted_label_values = sorted(labels.dropna().unique(), key=_natural_key)
+
+    # Build sorted index: cells grouped by label in natural order
+    sorted_index = pd.Index([
+        cell_id
+        for lbl in sorted_label_values
+        for cell_id in labels[labels == lbl].index
+    ])
+    cxg = cxg.reindex(sorted_index)
+    sorted_labels_arr = labels.reindex(sorted_index).to_numpy()
+
+    # Gene column sorting
+    if gene_sort == 'round_channel':
+        if dataset is None:
+            raise ValueError("dataset parameter required when gene_sort='round_channel'")
+        channel_gene_table = dataset.create_channel_gene_table()
+        gene_order = channel_gene_table.sort_values(['Round', 'Channel'])['Gene'].tolist()
+        gene_order = [g for g in gene_order if g in cxg.columns]
+        cxg = cxg[gene_order]
+    elif gene_sort == 'alphabetical':
+        cxg = cxg[sorted(cxg.columns)]
+
+    effective_gene_label = gene_label
+    if gene_sort == 'round_channel' and gene_label == 'gene':
+        effective_gene_label = 'round_channel_gene'
+    x_labels = _build_gene_labels(cxg.columns.tolist(), effective_gene_label, dataset)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=fig_size)
+    else:
+        fig = ax.figure
+
+    im = ax.imshow(cxg, aspect="auto", cmap="gray_r", interpolation="none")
+
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label(cbar_label, rotation=270, labelpad=20)
+    cbar.ax.tick_params(labelsize=10)
+
+    ax.set_xticks(ticks=range(len(cxg.columns)), labels=x_labels, rotation=90)
+    ax.set_ylabel("Cells (grouped by cluster label)", fontsize=9)
+
+    if add_cluster_labels:
+        # Boundary between consecutive rows with different labels
+        cluster_changes = np.where(
+            sorted_labels_arr[:-1] != sorted_labels_arr[1:]
+        )[0] + 0.5
+        for boundary in cluster_changes:
+            ax.axhline(y=boundary, color="green", linestyle="--", linewidth=1.0, alpha=0.7)
+
+        for lbl in sorted_label_values:
+            indices = np.where(sorted_labels_arr == lbl)[0]
+            if len(indices) == 0:
+                continue
+            center = (indices[0] + indices[-1]) / 2
+            ax.text(
+                -0.5,
+                center,
+                str(lbl),
+                color="green",
+                fontweight="normal",
+                fontsize=label_fontsize,
+                verticalalignment="center",
+                horizontalalignment="right",
+            )
+
+    if title is not None:
+        ax.set_title(title)
+
+    n_cells = len(cxg)
+    ax.set_yticks([0, n_cells - 1])
+    ax.set_yticklabels([0, n_cells])
+
+    return fig, sorted_labels_arr, sorted_index
+
+
 from sklearn.metrics import silhouette_score
+
+
+@saveable_plot()
+def plot_kmeans_k_selection(
+    cxg,
+    k_range=(2, 15),
+    clip_range=None,
+    n_init=10,
+    random_state=42,
+    fig_size=(10, 4),
+    title=None,
+):
+    """
+    Compute and plot elbow (inertia) and silhouette scores for a range of k values.
+
+    Runs k-means for every k in *k_range* and produces a two-panel figure:
+    left panel shows the within-cluster sum of squares (elbow method), right
+    panel shows the silhouette score.  The silhouette-optimal k is highlighted
+    with a dashed vertical line on both panels.
+
+    Parameters
+    ----------
+    cxg : pd.DataFrame
+        Cell × gene matrix (genes as columns, cells as rows).
+    k_range : tuple
+        ``(k_min, k_max)`` inclusive range of k values to evaluate.
+        Defaults to ``(2, 15)``.
+    clip_range : tuple, optional
+        If supplied, clip cxg values to ``(min, max)`` before clustering.
+        Useful when the matrix was not already clipped.
+    n_init : int
+        Number of k-means initialisations per k (passed to ``KMeans``).
+    random_state : int
+        Random seed for reproducibility.
+    fig_size : tuple
+        ``(width, height)`` in inches.
+    title : str, optional
+        Overall figure title.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    results : dict
+        ``{'k_values': list, 'inertia': list, 'silhouette': list,
+           'best_k_silhouette': int}``
+    """
+    if not isinstance(cxg, pd.DataFrame):
+        raise ValueError("cxg must be a pandas DataFrame.")
+
+    data = cxg.copy().fillna(0).astype(float)
+    if clip_range is not None:
+        data = data.clip(lower=clip_range[0], upper=clip_range[1])
+
+    k_min, k_max = k_range
+    k_max = min(k_max, len(data) - 1)
+    k_values = list(range(k_min, k_max + 1))
+
+    inertias = []
+    sil_scores = []
+
+    for k in k_values:
+        km = KMeans(n_clusters=k, random_state=random_state, n_init=n_init)
+        labels = km.fit_predict(data.values)
+        inertias.append(km.inertia_)
+        sil_scores.append(silhouette_score(data.values, labels))
+
+    best_k = k_values[int(np.argmax(sil_scores))]
+
+    fig, (ax_elbow, ax_sil) = plt.subplots(1, 2, figsize=fig_size)
+
+    # --- Elbow ---
+    ax_elbow.plot(k_values, inertias, marker="o", color="steelblue", linewidth=1.5)
+    ax_elbow.axvline(best_k, color="tomato", linestyle="--", linewidth=1.2,
+                     label=f"best sil. k={best_k}")
+    ax_elbow.set_xlabel("k")
+    ax_elbow.set_ylabel("Inertia (WCSS)")
+    ax_elbow.set_title("Elbow method")
+    ax_elbow.set_xticks(k_values)
+    ax_elbow.legend(fontsize=8)
+
+    # --- Silhouette ---
+    ax_sil.plot(k_values, sil_scores, marker="o", color="darkorange", linewidth=1.5)
+    ax_sil.axvline(best_k, color="tomato", linestyle="--", linewidth=1.2,
+                   label=f"best k={best_k} ({max(sil_scores):.3f})")
+    ax_sil.set_xlabel("k")
+    ax_sil.set_ylabel("Silhouette score")
+    ax_sil.set_title("Silhouette score")
+    ax_sil.set_xticks(k_values)
+    ax_sil.legend(fontsize=8)
+
+    if title:
+        fig.suptitle(title, fontsize=11, y=1.02)
+
+    fig.tight_layout()
+
+    results = {
+        "k_values": k_values,
+        "inertia": inertias,
+        "silhouette": sil_scores,
+        "best_k_silhouette": best_k,
+    }
+    return fig, results
+
+
+@saveable_plot()
+def plot_cell_x_gene_hierarchical(
+    cxg,
+    clip_range=None,
+    row_cluster=True,
+    col_cluster=False,
+    linkage_method='ward',
+    metric='euclidean',
+    fig_size=(8, 10),
+    cbar_label="Transcript count",
+    title=None,
+    cmap='gray_r',
+    gene_sort='alphabetical',
+    dataset=None,
+    gene_label='gene',
+):
+    """
+    Plot a cell × gene heatmap with hierarchical clustering and dendrogram(s).
+
+    Uses :func:`scipy.cluster.hierarchy.optimal_leaf_ordering` to find the
+    best leaf permutation within the dendrogram, then renders via
+    ``seaborn.clustermap``.
+
+    Parameters
+    ----------
+    cxg : pd.DataFrame
+        Cell × gene matrix (cells as rows, genes as columns).
+    clip_range : tuple, optional
+        ``(min, max)`` values to clip before clustering and plotting.
+    row_cluster : bool
+        Hierarchically cluster cells (rows).  Default ``True``.
+    col_cluster : bool
+        Hierarchically cluster genes (columns).  Default ``False`` —
+        genes stay in the order determined by *gene_sort*.
+    linkage_method : str
+        Linkage criterion (``'ward'``, ``'complete'``, ``'average'``, …).
+        Passed to :func:`scipy.cluster.hierarchy.linkage`.
+    metric : str
+        Distance metric (``'euclidean'``, ``'correlation'``, …).
+        Passed to :func:`scipy.cluster.hierarchy.linkage`.
+    fig_size : tuple
+        ``(width, height)`` in inches for the entire figure.
+    cbar_label : str
+        Colorbar label.  Default ``"Transcript count"``.
+    title : str, optional
+        Overall figure title.
+    cmap : str
+        Matplotlib colormap.  Default ``'gray_r'``.
+    gene_sort : str, optional
+        How to sort gene columns when *col_cluster* is ``False``.
+        ``'alphabetical'`` (default) or ``'round_channel'`` (requires
+        *dataset*).
+    dataset : HCRDataset, optional
+        Required when ``gene_sort='round_channel'``.
+    gene_label : str, optional
+        X-axis tick label style — ``'gene'`` or ``'round_channel_gene'``.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    sorted_cell_ids : pd.Index
+        Cell IDs in the dendrogram leaf order (top → bottom), or the
+        original order when *row_cluster* is ``False``.
+    """
+    import seaborn as sns
+
+    if not isinstance(cxg, pd.DataFrame):
+        raise ValueError("cxg must be a pandas DataFrame.")
+
+    data = cxg.copy().fillna(0).astype(float)
+    if clip_range is not None:
+        data = data.clip(lower=clip_range[0], upper=clip_range[1])
+
+    # Gene column ordering (applied before column clustering, or in place of it)
+    if not col_cluster:
+        if gene_sort == 'alphabetical':
+            data = data[sorted(data.columns)]
+        elif gene_sort == 'round_channel':
+            if dataset is None:
+                raise ValueError("dataset required for gene_sort='round_channel'")
+            channel_gene_table = dataset.create_channel_gene_table()
+            gene_order = channel_gene_table.sort_values(['Round', 'Channel'])['Gene'].tolist()
+            gene_order = [g for g in gene_order if g in data.columns]
+            data = data[gene_order]
+
+    x_labels = _build_gene_labels(data.columns.tolist(), gene_label, dataset)
+
+    # Pre-compute linkage with optimal leaf ordering so the dendrogram
+    # minimises adjacent-leaf distance for a cleaner visual result.
+    row_linkage = None
+    col_linkage = None
+    if row_cluster:
+        Z_row = linkage(data.values, method=linkage_method, metric=metric)
+        row_linkage = optimal_leaf_ordering(Z_row, data.values)
+    if col_cluster:
+        Z_col = linkage(data.values.T, method=linkage_method, metric=metric)
+        col_linkage = optimal_leaf_ordering(Z_col, data.values.T)
+
+    g = sns.clustermap(
+        data,
+        row_linkage=row_linkage,
+        col_linkage=col_linkage,
+        row_cluster=row_cluster,
+        col_cluster=col_cluster,
+        cmap=cmap,
+        figsize=fig_size,
+        xticklabels=True,
+        yticklabels=False,
+        dendrogram_ratio=(0.15, 0.08),
+        cbar_pos=(0.02, 0.80, 0.03, 0.15),
+    )
+
+    # Apply gene labels (reordered if col_cluster=True)
+    if col_cluster:
+        ordered_x_labels = [x_labels[i] for i in g.dendrogram_col.reordered_ind]
+    else:
+        ordered_x_labels = x_labels
+    g.ax_heatmap.set_xticklabels(ordered_x_labels, rotation=90, fontsize=8)
+    g.ax_heatmap.set_xlabel("")
+    g.ax_heatmap.set_ylabel("Cells", fontsize=9)
+    g.ax_cbar.set_ylabel(cbar_label, rotation=270, labelpad=15, fontsize=9)
+
+    if title:
+        g.fig.suptitle(title, fontsize=11, y=1.02)
+
+    sorted_cell_ids = (
+        data.index[g.dendrogram_row.reordered_ind] if row_cluster else data.index
+    )
+    return g.fig, sorted_cell_ids
 
 
 def _plot_inhibitory_gene_dist(cxg_pivot, gene, threshold, log_transform,ax=None, drop_zeros=True):

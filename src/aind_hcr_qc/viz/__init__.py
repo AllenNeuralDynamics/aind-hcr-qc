@@ -1,7 +1,10 @@
 from .camera_alignment import qc_camera_alignment
 from .cell_x_gene import (
     plot_cell_x_gene_clustered,
+    plot_cell_x_gene_labeled,
     plot_cell_x_gene_simple,
+    plot_cell_x_gene_hierarchical,
+    plot_kmeans_k_selection,
     fig_mixed_unmixed_cxg_and_corr,
     # thresholding
     compute_gmm_bic_table,
@@ -62,6 +65,9 @@ __all__ = [
     # cell x gene
     "plot_cell_x_gene_simple",
     "plot_cell_x_gene_clustered",
+    "plot_cell_x_gene_labeled",
+    "plot_cell_x_gene_hierarchical",
+    "plot_kmeans_k_selection",
     "fig_mixed_unmixed_cxg_and_corr",
     "plot_cluster_centroids"
     # gmm thresholding
