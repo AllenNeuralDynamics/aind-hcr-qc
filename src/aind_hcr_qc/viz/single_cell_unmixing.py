@@ -11,12 +11,18 @@ Three complementary views for one cell × one round:
 """
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 from pathlib import Path
 from matplotlib.gridspec import GridSpec
 from scipy.spatial import KDTree
 from aind_hcr_qc.utils.utils import saveable_plot
-from aind_hcr_qc.viz.cells import plot_single_cell_expression_all_rounds, get_cell_centroid_from_spots
+from aind_hcr_qc.viz.cells import (
+    plot_single_cell_expression_all_rounds,
+    plot_all_channels_cell,
+    get_cell_centroid_from_spots,
+)
 from aind_hcr_qc.viz.spot_detection import plot_crosstalk_scores_intensity
 
 from aind_hcr_qc.constants import Z1_CHANNEL_CMAP_VIBRANT
@@ -1433,3 +1439,272 @@ def plot_nn_euclidean_dists_pooled(spots_df, pairs, chan_colors, label,
     fig.tight_layout()
     plt.show()
     return summary
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Private helpers for fig_single_cell_unmixing_mg
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mg_spot_limits(df):
+    """Return (xlim, ylim_inverted) that fit all spots in *df*."""
+    if len(df) == 0:
+        return (0, 1), (1, 0)
+    xs, ys = df["x"].values, df["y"].values
+    px = max((xs.max() - xs.min()) * 0.05, 5)
+    py = max((ys.max() - ys.min()) * 0.05, 5)
+    return (xs.min() - px, xs.max() + px), (ys.max() + py, ys.min() - py)
+
+
+def _mg_plot_chan_scatter_row(subfig, df, chan_col, chan_order, chan_colors,
+                               title, xlim, ylim, spot_size=14):
+    """One row: per-channel spot scatter, each panel colored by channel.
+
+    A blank placeholder panel is prepended for channel 405 so that all
+    spot rows align with the 6-panel image rows (405 + chan_order).
+    """
+    n = len(chan_order) + 1  # +1 for blank 405 placeholder
+    axes = subfig.subplots(1, n)
+    subfig.suptitle(title, fontsize=_fs(12), fontweight="bold", x=0.01, ha="left")
+
+    # blank 405 placeholder
+    axes[0].set_title("Ch 405", fontsize=_fs(10))
+    axes[0].axis("off")
+
+    for i, ch in enumerate(chan_order):
+        ax = axes[i + 1]
+        sub = df[df[chan_col] == ch]
+        ax.scatter(sub["x"], sub["y"], c=chan_colors[ch],
+                   s=spot_size, alpha=0.65, linewidths=0)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_title(f"Ch {ch}  (n={len(sub)})", fontsize=_fs(10))
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.tick_params(labelsize=_fs(8))
+        ax.tick_params(labelleft=False)
+
+    # Invisible dummy colorbar anchored to axes[1] — keeps the same layout
+    # indent as the metric rows which have a real colorbar in that slot.
+    dummy_sm = plt.cm.ScalarMappable(cmap="Greys",
+                                     norm=plt.Normalize(vmin=0, vmax=1))
+    _cb = plt.colorbar(dummy_sm, ax=axes[1], location="left",
+                       pad=0.08, fraction=0.046)
+    _cb.ax.set_visible(False)
+
+
+def _mg_plot_metric_scatter_row(subfig, df, metric_col, chan_order, chan_colors,
+                                 title, xlim, ylim,
+                                 cmap="viridis", vmin=None, vmax=None,
+                                 spot_size=14):
+    """One row: per-channel scatter, spots colored by a continuous metric.
+
+    A blank placeholder panel is prepended for channel 405 so that all
+    spot rows align with the 6-panel image rows (405 + chan_order).
+    A single colorbar is drawn on the leftmost non-blank (first channel) panel.
+    """
+    n = len(chan_order) + 1  # +1 for blank 405 placeholder
+    axes = subfig.subplots(1, n)
+    subfig.suptitle(title, fontsize=_fs(12), fontweight="bold", x=0.01, ha="left")
+
+    # blank 405 placeholder
+    axes[0].set_title("Ch 405", fontsize=_fs(10))
+    axes[0].axis("off")
+
+    # Global metric range (2nd–98th pct) for a shared colorbar scale
+    if vmin is None or vmax is None:
+        all_vals = df[metric_col].dropna().values if metric_col in df.columns else np.array([])
+        _vmin = float(np.percentile(all_vals, 2)) if len(all_vals) else 0.0
+        _vmax = float(np.percentile(all_vals, 98)) if len(all_vals) else 1.0
+        if vmin is None:
+            vmin = _vmin
+        if vmax is None:
+            vmax = _vmax
+
+    # Draw a shared colorbar on the first channel panel only;
+    # always use axes[1] (the first data-channel slot) as the anchor so the
+    # colorbar sits in a fixed column regardless of whether that channel has data.
+    _first_sc = None
+
+    for i, ch in enumerate(chan_order):
+        ax = axes[i + 1]
+        sub = df[df["unmixed_chan"] == ch]
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.tick_params(labelsize=_fs(8))
+        ax.tick_params(labelleft=False)
+
+        if len(sub) == 0:
+            ax.set_title(f"Ch {ch}  (n=0)", fontsize=_fs(10))
+            ax.text(0.5, 0.5, "no spots", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=_fs(9), color="grey")
+            continue
+
+        vals = sub[metric_col].values if metric_col in sub.columns else np.zeros(len(sub))
+        sc = ax.scatter(sub["x"], sub["y"], c=vals,
+                        cmap=cmap, vmin=vmin, vmax=vmax,
+                        s=spot_size, alpha=0.65, linewidths=0)
+        ax.set_title(f"Ch {ch}  (n={len(sub)})", fontsize=_fs(10))
+
+        if _first_sc is None:
+            _first_sc = sc
+
+    # Single colorbar anchored to axes[1] (first data-channel column, always fixed)
+    if _first_sc is not None:
+        cb = plt.colorbar(_first_sc, ax=axes[1], location="left",
+                          pad=0.08, fraction=0.046)
+        cb.set_label(metric_col, labelpad=6)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# fig_single_cell_unmixing_mg
+# ─────────────────────────────────────────────────────────────────────────────
+
+@saveable_plot()
+def fig_single_cell_unmixing_mg(
+    m_cell,
+    u_cell,
+    cell_id,
+    round_key,
+    chan_order=CHAN_ORDER,
+    chan_colors=CHAN_COLORS,
+    dataset=None,
+    pyramid_level="0",
+    img_fixed_vmin=90,
+    img_fixed_vmax=1200,
+    spot_size=14,
+    fast_plot=False,
+):
+    """
+    Seven-row single-cell unmixing figure.
+
+    Row 1  — raw image per channel, auto-scaled (5th–99.9th percentile).
+    Row 2  — raw image per channel, fixed scale (img_fixed_vmin–img_fixed_vmax).
+    Row 3  — mixed spots per channel (x/y scatter, channel color).
+    Row 4  — unmixed spots per channel (x/y scatter, channel color).
+    Row 5  — unmixed spots per channel, colored by ``r``.
+    Row 6  — unmixed spots per channel, colored by ``d_assignment_ratio``.
+    Row 7  — unmixed spots per channel, colored by ``dist``.
+
+    Parameters
+    ----------
+    m_cell : pd.DataFrame
+        Mixed spots for this cell/round (all spots, pre-filter).
+    u_cell : pd.DataFrame
+        Unmixed spots for this cell/round.
+    cell_id : int or str
+        Cell identifier shown in the figure title.
+    round_key : str
+        Round identifier shown in the figure title.
+    chan_order : list of str
+        Channel display order, e.g. ``["488", "514", "561", "594", "638"]``.
+    chan_colors : dict
+        Mapping ``{channel_str: color}``.
+    dataset : HCRDataset
+        Used to load raw zarr image crops for rows 1 & 2.
+    pyramid_level : str
+        Zarr pyramid level forwarded to the image loader.
+    img_fixed_vmin : float
+        Lower intensity clip for row 2.
+    img_fixed_vmax : float
+        Upper intensity clip for row 2.
+    spot_size : float
+        Marker size (``s``) for all scatter panels (rows 3–7).
+    fast_plot : bool
+        When ``True``, skip zarr image loading and leave rows 1 & 2 blank.
+        Useful for rapid iteration on spot rows without the I/O overhead.
+    """
+    sns.set_context("notebook", font_scale=1.5)
+
+    # ── shared spatial limits (union of mixed + unmixed spots) ────────────────
+    _all_xy = pd.concat([m_cell[["x", "y"]], u_cell[["x", "y"]]], ignore_index=True)
+    xlim, ylim = _mg_spot_limits(_all_xy)
+
+    # ── figure skeleton ───────────────────────────────────────────────────────
+    img_h, spot_h = 4.5, 3.5
+    height_ratios = [img_h, img_h, spot_h, spot_h, spot_h, spot_h, spot_h]
+    total_h = sum(height_ratios) + 1.0
+
+    fig = plt.figure(figsize=(26, total_h), constrained_layout=True)
+    try:
+        mouse_id = dataset.mouse_id
+    except Exception:
+        mouse_id = "?"
+
+    fig.suptitle(
+        f"Cell {cell_id}  —  Round {round_key}  —  Mouse {mouse_id}  [unmixing overview]",
+        fontsize=_fs(16), fontweight="bold", y=1.01,
+    )
+    sfigs = fig.subfigures(7, 1, height_ratios=height_ratios, hspace=0.05)
+
+    # ── row 1: raw images, auto-scaled ────────────────────────────────────────
+    if fast_plot:
+        ax_blank1 = sfigs[0].add_subplot(1, 1, 1)
+        ax_blank1.axis("off")
+        ax_blank1.text(0.5, 0.5, "[image skipped — fast_plot=True]",
+                       transform=ax_blank1.transAxes, ha="center", va="center",
+                       fontsize=_fs(11), color="grey", style="italic")
+    else:
+        plot_all_channels_cell(
+            dataset=dataset, round_key=round_key, cell_id=cell_id,
+            pyramid_level=pyramid_level, vmin_vmax="auto",
+            plot_mask_outlines=False, fig=sfigs[0],
+        )
+    sfigs[0].suptitle(
+        "Row 1 — Raw image  [auto-scaled]",
+        fontsize=_fs(11), fontweight="bold", x=0.01, ha="left",
+    )
+
+    # ── row 2: raw images, fixed scale ───────────────────────────────────────
+    if fast_plot:
+        ax_blank2 = sfigs[1].add_subplot(1, 1, 1)
+        ax_blank2.axis("off")
+        ax_blank2.text(0.5, 0.5, "[image skipped — fast_plot=True]",
+                       transform=ax_blank2.transAxes, ha="center", va="center",
+                       fontsize=_fs(11), color="grey", style="italic")
+    else:
+        plot_all_channels_cell(
+            dataset=dataset, round_key=round_key, cell_id=cell_id,
+            pyramid_level=pyramid_level,
+            vmin_vmax=(img_fixed_vmin, img_fixed_vmax),
+            plot_mask_outlines=False, fig=sfigs[1],
+        )
+    sfigs[1].suptitle(
+        f"Row 2 — Raw image  [{img_fixed_vmin}–{img_fixed_vmax}]",
+        fontsize=_fs(11), fontweight="bold", x=0.01, ha="left",
+    )
+
+    # ── row 3: mixed spots ────────────────────────────────────────────────────
+    _mg_plot_chan_scatter_row(
+        sfigs[2], m_cell, "chan", chan_order, chan_colors,
+        "Row 3 — Mixed spots  (detected channel)", xlim, ylim,
+        spot_size=spot_size,
+    )
+
+    # ── row 4: unmixed spots ──────────────────────────────────────────────────
+    _mg_plot_chan_scatter_row(
+        sfigs[3], u_cell, "unmixed_chan", chan_order, chan_colors,
+        "Row 4 — Unmixed spots  (assigned channel)", xlim, ylim,
+        spot_size=spot_size,
+    )
+
+    # ── row 5: metric r ───────────────────────────────────────────────────────
+    _mg_plot_metric_scatter_row(
+        sfigs[4], u_cell, "r", chan_order, chan_colors,
+        "Row 5 — Unmixed spots  ·  metric: r", xlim, ylim,
+        cmap="viridis", spot_size=spot_size,
+    )
+
+    # ── row 6: metric d_assignment_ratio ─────────────────────────────────────
+    _mg_plot_metric_scatter_row(
+        sfigs[5], u_cell, "d_assignment_ratio", chan_order, chan_colors,
+        "Row 6 — Unmixed spots  ·  metric: d_assignment_ratio", xlim, ylim,
+        cmap="plasma", spot_size=spot_size,
+    )
+
+    # ── row 7: metric dist ────────────────────────────────────────────────────
+    _mg_plot_metric_scatter_row(
+        sfigs[6], u_cell, "dist", chan_order, chan_colors,
+        "Row 7 — Unmixed spots  ·  metric: dist", xlim, ylim,
+        cmap="magma", spot_size=spot_size,
+    )
+
+    return fig
