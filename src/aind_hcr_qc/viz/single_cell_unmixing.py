@@ -1708,3 +1708,278 @@ def fig_single_cell_unmixing_mg(
     )
 
     return fig
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Private helpers for fig_single_cell_unmixing_mg2
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mg2_plot_metric_row(subfig, df, chan_col, metric_col, chan_order,
+                          title, xlim, ylim,
+                          cmap="viridis", vmin=None, vmax=None,
+                          spot_size=14):
+    """One row for mg2: per-channel scatter colored by a continuous metric.
+
+    Spots from rows without unmixing data (e.g. spots removed before unmixing)
+    may lack ``metric_col``; those are drawn in grey.
+
+    Parameters
+    ----------
+    chan_col : str
+        Column used to split spots into per-channel panels (``"chan"`` for
+        mixed-table rows, ``"unmixed_chan"`` for unmixed-table rows).
+    metric_col : str
+        Column to map to colour.  If absent from *df*, all spots are grey.
+    """
+    n = len(chan_order) + 1
+    axes = subfig.subplots(1, n)
+    subfig.suptitle(title, fontsize=_fs(12), fontweight="bold", x=0.01, ha="left")
+
+    axes[0].set_title("Ch 405", fontsize=_fs(10))
+    axes[0].axis("off")
+
+    has_metric = metric_col in df.columns and len(df) > 0
+    _first_sc = None
+
+    for i, ch in enumerate(chan_order):
+        ax = axes[i + 1]
+        sub = df[df[chan_col] == ch] if chan_col in df.columns else df.iloc[0:0]
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.tick_params(labelsize=_fs(8))
+        ax.tick_params(labelleft=False)
+
+        if len(sub) == 0:
+            ax.set_title(f"Ch {ch}  (n=0)", fontsize=_fs(10))
+            ax.text(0.5, 0.5, "no spots", transform=ax.transAxes,
+                    ha="center", va="center", fontsize=_fs(9), color="grey")
+            continue
+
+        ax.set_title(f"Ch {ch}  (n={len(sub)})", fontsize=_fs(10))
+        if has_metric:
+            vals = sub[metric_col].values
+            sc = ax.scatter(sub["x"], sub["y"], c=vals,
+                            cmap=cmap, vmin=vmin, vmax=vmax,
+                            s=spot_size, alpha=0.65, linewidths=0)
+            if _first_sc is None:
+                _first_sc = sc
+        else:
+            ax.scatter(sub["x"], sub["y"], c="grey",
+                       s=spot_size, alpha=0.45, linewidths=0)
+
+    if _first_sc is not None:
+        cb = plt.colorbar(_first_sc, ax=axes[1], location="left",
+                          pad=0.08, fraction=0.046)
+        cb.set_label(metric_col, labelpad=6)
+    else:
+        # Invisible dummy colorbar — keeps layout aligned with metric rows
+        dummy_sm = plt.cm.ScalarMappable(cmap=cmap,
+                                         norm=plt.Normalize(vmin=0, vmax=1))
+        _cb = plt.colorbar(dummy_sm, ax=axes[1], location="left",
+                           pad=0.08, fraction=0.046)
+        _cb.ax.set_visible(False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# fig_single_cell_unmixing_mg2
+# ─────────────────────────────────────────────────────────────────────────────
+
+@saveable_plot()
+def fig_single_cell_unmixing_mg2(
+    m_cell,
+    u_cell,
+    cell_id,
+    round_key,
+    chan_order=CHAN_ORDER,
+    chan_colors=CHAN_COLORS,
+    dataset=None,
+    pyramid_level="0",
+    img_fixed_vmin=90,
+    img_fixed_vmax=1200,
+    spot_size=14,
+    fast_plot=False,
+    metric_col="r",
+    cmap="viridis",
+    vmin=None,
+    vmax=None,
+):
+    """
+    Seven-row single-cell unmixing figure — subset breakdown variant.
+
+    Row 1  — raw image per channel, auto-scaled (5th–99.9th percentile).
+    Row 2  — raw image per channel, fixed scale (img_fixed_vmin–img_fixed_vmax).
+    Row 3  — all mixed spots, colored by ``metric_col``.
+    Row 4  — spots removed by unmixing, colored by ``metric_col``.
+    Row 5  — spots kept by unmixing (all), colored by ``metric_col``.
+    Row 6  — spots kept by unmixing but removed by QC filters, colored by ``metric_col``.
+    Row 7  — spots kept by unmixing and QC filters, colored by ``metric_col``.
+
+    Spots in rows 3–4 are split into per-channel panels using the detected
+    channel (``chan``).  Rows 5–7 use the assigned channel (``unmixed_chan``).
+    Spots that lack ``metric_col`` (e.g. removed-by-unmixing spots in row 4)
+    are drawn in grey.
+
+    QC-filter status is derived from the ``valid_spot`` column of *u_cell*
+    when present.  If that column is absent, row 6 is empty and row 7 shows
+    all unmixed spots.
+
+    Parameters
+    ----------
+    m_cell : pd.DataFrame
+        Mixed spots for this cell / round.
+    u_cell : pd.DataFrame
+        Unmixed spots for this cell / round.
+    cell_id : int or str
+        Cell identifier shown in the figure title.
+    round_key : str
+        Round identifier shown in the figure title.
+    chan_order : list of str
+        Channel display order.
+    chan_colors : dict
+        Mapping ``{channel_str: color}`` (unused for coloring but kept for
+        API symmetry with ``fig_single_cell_unmixing_mg``).
+    dataset : HCRDataset
+        Used to load raw zarr image crops for rows 1 & 2.
+    pyramid_level : str
+        Zarr pyramid level forwarded to the image loader.
+    img_fixed_vmin, img_fixed_vmax : float
+        Intensity clip for row 2.
+    spot_size : float
+        Marker size for scatter panels.
+    fast_plot : bool
+        When ``True``, skip zarr image loading and leave rows 1 & 2 blank.
+    metric_col : str
+        Column in *u_cell* used to colour spots.  Defaults to ``"r"``
+        (correlation to ideal Gaussian).  Also applied to *m_cell* rows when
+        the column is present there.
+    cmap : str
+        Matplotlib colormap name.
+    vmin, vmax : float or None
+        Explicit colorscale limits.  ``None`` → 2nd–98th percentile of all
+        values in *u_cell[metric_col]*.
+    """
+    sns.set_context("notebook", font_scale=1.5)
+
+    # ── derive spot subsets ───────────────────────────────────────────────────
+    in_unmixed = set(u_cell["spot_uid"]) if "spot_uid" in u_cell.columns else set()
+    removed_by_unmixing = (
+        m_cell[~m_cell["spot_uid"].isin(in_unmixed)]
+        if "spot_uid" in m_cell.columns
+        else m_cell.iloc[0:0]
+    )
+
+    if "valid_spot" in u_cell.columns:
+        kept_removed_qc = u_cell[u_cell["valid_spot"] == False]
+        kept_passed_qc  = u_cell[u_cell["valid_spot"] == True]
+    else:
+        kept_removed_qc = u_cell.iloc[0:0]
+        kept_passed_qc  = u_cell
+
+    # ── shared spatial limits ─────────────────────────────────────────────────
+    _all_xy = pd.concat([m_cell[["x", "y"]], u_cell[["x", "y"]]], ignore_index=True)
+    xlim, ylim = _mg_spot_limits(_all_xy)
+
+    # ── shared colorscale (2nd–98th pct of all unmixed-spot values) ──────────
+    if metric_col in u_cell.columns:
+        all_vals = u_cell[metric_col].dropna().values
+        _vmin = float(np.percentile(all_vals, 2)) if len(all_vals) else 0.0
+        _vmax = float(np.percentile(all_vals, 98)) if len(all_vals) else 1.0
+    else:
+        _vmin, _vmax = 0.0, 1.0
+    if vmin is None:
+        vmin = _vmin
+    if vmax is None:
+        vmax = _vmax
+
+    # ── figure skeleton ───────────────────────────────────────────────────────
+    img_h, spot_h = 4.5, 3.5
+    height_ratios = [img_h, img_h, spot_h, spot_h, spot_h, spot_h, spot_h]
+    total_h = sum(height_ratios) + 1.0
+
+    fig = plt.figure(figsize=(26, total_h), constrained_layout=True)
+    try:
+        mouse_id = dataset.mouse_id
+    except Exception:
+        mouse_id = "?"
+
+    fig.suptitle(
+        f"Cell {cell_id}  —  Round {round_key}  —  Mouse {mouse_id}"
+        f"  [unmixing subsets · {metric_col}]",
+        fontsize=_fs(16), fontweight="bold", y=1.01,
+    )
+    sfigs = fig.subfigures(7, 1, height_ratios=height_ratios, hspace=0.05)
+
+    # ── row 1: raw images, auto-scaled ────────────────────────────────────────
+    if fast_plot:
+        ax_blank1 = sfigs[0].add_subplot(1, 1, 1)
+        ax_blank1.axis("off")
+        ax_blank1.text(0.5, 0.5, "[image skipped — fast_plot=True]",
+                       transform=ax_blank1.transAxes, ha="center", va="center",
+                       fontsize=_fs(11), color="grey", style="italic")
+    else:
+        plot_all_channels_cell(
+            dataset=dataset, round_key=round_key, cell_id=cell_id,
+            pyramid_level=pyramid_level, vmin_vmax="auto",
+            plot_mask_outlines=False, fig=sfigs[0],
+        )
+    sfigs[0].suptitle(
+        "Row 1 — Raw image  [auto-scaled]",
+        fontsize=_fs(11), fontweight="bold", x=0.01, ha="left",
+    )
+
+    # ── row 2: raw images, fixed scale ───────────────────────────────────────
+    if fast_plot:
+        ax_blank2 = sfigs[1].add_subplot(1, 1, 1)
+        ax_blank2.axis("off")
+        ax_blank2.text(0.5, 0.5, "[image skipped — fast_plot=True]",
+                       transform=ax_blank2.transAxes, ha="center", va="center",
+                       fontsize=_fs(11), color="grey", style="italic")
+    else:
+        plot_all_channels_cell(
+            dataset=dataset, round_key=round_key, cell_id=cell_id,
+            pyramid_level=pyramid_level,
+            vmin_vmax=(img_fixed_vmin, img_fixed_vmax),
+            plot_mask_outlines=False, fig=sfigs[1],
+        )
+    sfigs[1].suptitle(
+        f"Row 2 — Raw image  [{img_fixed_vmin}–{img_fixed_vmax}]",
+        fontsize=_fs(11), fontweight="bold", x=0.01, ha="left",
+    )
+
+    # ── row 3: all mixed spots ────────────────────────────────────────────────
+    _mg2_plot_metric_row(
+        sfigs[2], m_cell, "chan", metric_col, chan_order,
+        f"Row 3 — Mixed spots  (all, n={len(m_cell)})  ·  {metric_col}",
+        xlim, ylim, cmap=cmap, vmin=vmin, vmax=vmax, spot_size=spot_size,
+    )
+
+    # ── row 4: spots removed by unmixing ─────────────────────────────────────
+    _mg2_plot_metric_row(
+        sfigs[3], removed_by_unmixing, "chan", metric_col, chan_order,
+        f"Row 4 — Removed by unmixing  (n={len(removed_by_unmixing)})  ·  {metric_col}",
+        xlim, ylim, cmap=cmap, vmin=vmin, vmax=vmax, spot_size=spot_size,
+    )
+
+    # ── row 5: all spots kept by unmixing ────────────────────────────────────
+    _mg2_plot_metric_row(
+        sfigs[4], u_cell, "unmixed_chan", metric_col, chan_order,
+        f"Row 5 — Kept by unmixing  (all, n={len(u_cell)})  ·  {metric_col}",
+        xlim, ylim, cmap=cmap, vmin=vmin, vmax=vmax, spot_size=spot_size,
+    )
+
+    # ── row 6: kept by unmixing, removed by QC filter ────────────────────────
+    _mg2_plot_metric_row(
+        sfigs[5], kept_removed_qc, "unmixed_chan", metric_col, chan_order,
+        f"Row 6 — Kept by unmixing, removed by QC  (n={len(kept_removed_qc)})  ·  {metric_col}",
+        xlim, ylim, cmap=cmap, vmin=vmin, vmax=vmax, spot_size=spot_size,
+    )
+
+    # ── row 7: kept by unmixing and QC filter ────────────────────────────────
+    _mg2_plot_metric_row(
+        sfigs[6], kept_passed_qc, "unmixed_chan", metric_col, chan_order,
+        f"Row 7 — Kept by unmixing and QC  (n={len(kept_passed_qc)})  ·  {metric_col}",
+        xlim, ylim, cmap=cmap, vmin=vmin, vmax=vmax, spot_size=spot_size,
+    )
+
+    return fig
