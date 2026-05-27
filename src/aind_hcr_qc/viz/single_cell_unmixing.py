@@ -1735,6 +1735,9 @@ def _mg2_plot_metric_row(subfig, df, chan_col, metric_col, chan_order,
     axes = subfig.subplots(1, n)
     subfig.suptitle(title, fontsize=_fs(12), fontweight="bold", x=0.01, ha="left")
 
+    for ax in axes:
+        ax.set_facecolor("grey")
+
     axes[0].set_title("Ch 405", fontsize=_fs(10))
     axes[0].axis("off")
 
@@ -1761,12 +1764,12 @@ def _mg2_plot_metric_row(subfig, df, chan_col, metric_col, chan_order,
             vals = sub[metric_col].values
             sc = ax.scatter(sub["x"], sub["y"], c=vals,
                             cmap=cmap, vmin=vmin, vmax=vmax,
-                            s=spot_size, alpha=0.65, linewidths=0)
+                            s=spot_size, alpha=0.75, linewidths=.1)
             if _first_sc is None:
                 _first_sc = sc
         else:
             ax.scatter(sub["x"], sub["y"], c="grey",
-                       s=spot_size, alpha=0.45, linewidths=0)
+                       s=spot_size, alpha=0.55, linewidths=.1)
 
     if _first_sc is not None:
         cb = plt.colorbar(_first_sc, ax=axes[1], location="left",
@@ -1799,6 +1802,7 @@ def fig_single_cell_unmixing_mg2(
     img_fixed_vmax=1200,
     spot_size=14,
     fast_plot=False,
+    top_row_mask_outlines=True,
     metric_col="r",
     cmap="viridis",
     vmin=None,
@@ -1849,6 +1853,8 @@ def fig_single_cell_unmixing_mg2(
         Marker size for scatter panels.
     fast_plot : bool
         When ``True``, skip zarr image loading and leave rows 1 & 2 blank.
+    top_row_mask_outlines : bool
+        Whether to overlay mask outlines on row 1 (auto-scaled image row).
     metric_col : str
         Column in *u_cell* used to colour spots.  Defaults to ``"r"``
         (correlation to ideal Gaussian).  Also applied to *m_cell* rows when
@@ -1921,7 +1927,7 @@ def fig_single_cell_unmixing_mg2(
         plot_all_channels_cell(
             dataset=dataset, round_key=round_key, cell_id=cell_id,
             pyramid_level=pyramid_level, vmin_vmax="auto",
-            plot_mask_outlines=False, fig=sfigs[0],
+            plot_mask_outlines=top_row_mask_outlines, fig=sfigs[0],
         )
     sfigs[0].suptitle(
         "Row 1 — Raw image  [auto-scaled]",
