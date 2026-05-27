@@ -1721,7 +1721,8 @@ def _mg2_plot_metric_row(subfig, df, chan_col, metric_col, chan_order,
     """One row for mg2: per-channel scatter colored by a continuous metric.
 
     Spots from rows without unmixing data (e.g. spots removed before unmixing)
-    may lack ``metric_col``; those are drawn in grey.
+    may lack ``metric_col``; those are drawn in grey. Spots with missing
+    values in ``metric_col`` are also drawn in grey.
 
     Parameters
     ----------
@@ -1761,12 +1762,33 @@ def _mg2_plot_metric_row(subfig, df, chan_col, metric_col, chan_order,
 
         ax.set_title(f"Ch {ch}  (n={len(sub)})", fontsize=_fs(10))
         if has_metric:
-            vals = sub[metric_col].values
-            sc = ax.scatter(sub["x"], sub["y"], c=vals,
-                            cmap=cmap, vmin=vmin, vmax=vmax,
-                            s=spot_size, alpha=0.75, linewidths=.1)
-            if _first_sc is None:
-                _first_sc = sc
+            vals = pd.to_numeric(sub[metric_col], errors="coerce").to_numpy(dtype=float)
+            valid = np.isfinite(vals)
+
+            if np.any(valid):
+                sc = ax.scatter(
+                    sub.loc[valid, "x"],
+                    sub.loc[valid, "y"],
+                    c=vals[valid],
+                    cmap=cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    s=spot_size,
+                    alpha=0.75,
+                    linewidths=.1,
+                )
+                if _first_sc is None:
+                    _first_sc = sc
+
+            if np.any(~valid):
+                ax.scatter(
+                    sub.loc[~valid, "x"],
+                    sub.loc[~valid, "y"],
+                    c="grey",
+                    s=spot_size,
+                    alpha=0.55,
+                    linewidths=.1,
+                )
         else:
             ax.scatter(sub["x"], sub["y"], c="grey",
                        s=spot_size, alpha=0.55, linewidths=.1)
