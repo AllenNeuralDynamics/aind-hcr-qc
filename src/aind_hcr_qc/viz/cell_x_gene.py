@@ -649,6 +649,7 @@ def plot_cell_x_gene_labeled(
     gene_sort='alphabetical',
     dataset=None,
     gene_label='gene',
+    color_labels=None,
 ):
     """
     Plot a cell × gene heatmap sorted and grouped by pre-computed cluster labels.
@@ -689,6 +690,13 @@ def plot_cell_x_gene_labeled(
     gene_label : str, optional
         X-axis tick label style — ``'gene'`` (default) or
         ``'round_channel_gene'``.
+    color_labels : dict, optional
+        Mapping of label prefix (e.g. branch name) to a color string.
+        When provided, a narrow colored sidebar is drawn to the left of the
+        heatmap showing each cell's group color.  The label prefix is
+        extracted from the first token before ``"-"`` in each label.
+        Example: ``{"Pvalb": "#1f77b4", "Sst": "#d62728"}``.
+        A legend is added to the figure.
 
     Returns
     -------
@@ -754,15 +762,28 @@ def plot_cell_x_gene_labeled(
     cbar.ax.tick_params(labelsize=10)
 
     ax.set_xticks(ticks=range(len(cxg.columns)), labels=x_labels, rotation=90)
-    ax.set_ylabel("Cells (grouped by cluster label)", fontsize=9)
+
+    # Hide y-axis label when cluster labels are drawn (they occlude it)
+    if not add_cluster_labels:
+        ax.set_ylabel("Cells (grouped by cluster label)", fontsize=9)
 
     if add_cluster_labels:
+        # Determine label color: use color_labels dict if provided
+        def _label_color(lbl):
+            if color_labels is not None:
+                group = str(lbl).split("-")[0]
+                return color_labels.get(group, "green")
+            return "green"
+
         # Boundary between consecutive rows with different labels
         cluster_changes = np.where(
             sorted_labels_arr[:-1] != sorted_labels_arr[1:]
         )[0] + 0.5
         for boundary in cluster_changes:
-            ax.axhline(y=boundary, color="green", linestyle="--", linewidth=1.0, alpha=0.7)
+            # Color the boundary line by the cluster above it
+            idx_above = int(boundary - 0.5)
+            line_color = _label_color(sorted_labels_arr[idx_above])
+            ax.axhline(y=boundary, color=line_color, linestyle="--", linewidth=1.0, alpha=0.7)
 
         for lbl in sorted_label_values:
             indices = np.where(sorted_labels_arr == lbl)[0]
@@ -773,7 +794,7 @@ def plot_cell_x_gene_labeled(
                 -0.5,
                 center,
                 str(lbl),
-                color="green",
+                color=_label_color(lbl),
                 fontweight="normal",
                 fontsize=label_fontsize,
                 verticalalignment="center",
