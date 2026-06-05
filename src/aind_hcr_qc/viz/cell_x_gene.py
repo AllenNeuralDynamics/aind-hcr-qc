@@ -650,6 +650,7 @@ def plot_cell_x_gene_labeled(
     dataset=None,
     gene_label='gene',
     color_labels=None,
+    cmap="gray_r",
 ):
     """
     Plot a cell × gene heatmap sorted and grouped by pre-computed cluster labels.
@@ -713,7 +714,9 @@ def plot_cell_x_gene_labeled(
 
     cxg = cxg.copy()
     cxg = cxg.fillna(0)
-    cxg = cxg.astype(int)
+    # Only cast to int for count data; leave float data (e.g. z-scores) as-is.
+    if not any(cxg.dtypes.apply(lambda d: d.kind == 'f')):
+        cxg = cxg.astype(int)
     cxg = cxg.clip(lower=clip_range[0], upper=clip_range[1])
 
     # Align labels with cxg rows
@@ -755,7 +758,7 @@ def plot_cell_x_gene_labeled(
     else:
         fig = ax.figure
 
-    im = ax.imshow(cxg, aspect="auto", cmap="gray_r", interpolation="none")
+    im = ax.imshow(cxg, aspect="auto", cmap=cmap, interpolation="none")
 
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label(cbar_label, rotation=270, labelpad=20)
